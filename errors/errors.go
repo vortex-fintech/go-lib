@@ -97,6 +97,16 @@ func UnsupportedError(name, value string) ErrorResponse {
 	}
 }
 
+func NotFound(resource string, value string) ErrorResponse {
+	return ErrorResponse{
+		Code:    codes.NotFound,
+		Message: resource + " not found",
+		Details: map[string]string{
+			resource: value,
+		},
+	}
+}
+
 func NewError(message string, code codes.Code, details map[string]string) ErrorResponse {
 	return ErrorResponse{
 		Code:    code,

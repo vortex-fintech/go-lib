@@ -29,6 +29,14 @@ func TestUnsupportedError(t *testing.T) {
 	assert.Equal(t, map[string]string{"type": "xml"}, errResp.Details)
 }
 
+func TestNotFound(t *testing.T) {
+	errResp := errors.NotFound("User", "12345")
+
+	assert.Equal(t, codes.NotFound, errResp.Code)
+	assert.Equal(t, "User not found", errResp.Message)
+	assert.Equal(t, map[string]string{"User": "12345"}, errResp.Details)
+}
+
 func TestNewError(t *testing.T) {
 	details := map[string]string{"foo": "bar"}
 	errResp := errors.NewError("custom error", codes.Aborted, details)
@@ -82,5 +90,12 @@ func TestUnsupportedError_EmptyNameValue(t *testing.T) {
 	errResp := errors.UnsupportedError("", "")
 	assert.Equal(t, codes.InvalidArgument, errResp.Code)
 	assert.Equal(t, "Unsupported ", errResp.Message)
+	assert.True(t, reflect.DeepEqual(map[string]string{"": ""}, errResp.Details))
+}
+
+func TestNotFound_EmptyResourceValue(t *testing.T) {
+	errResp := errors.NotFound("", "")
+	assert.Equal(t, codes.NotFound, errResp.Code)
+	assert.Equal(t, " not found", errResp.Message)
 	assert.True(t, reflect.DeepEqual(map[string]string{"": ""}, errResp.Details))
 }
