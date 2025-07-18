@@ -291,7 +291,7 @@ make down        # Stop and remove container
 
 ```
 db/
-├── sql/
+├── dbsql/
 │   ├── helper.go
 └── postgres/
     ├── client.go
