@@ -38,6 +38,53 @@ func main() {
 }
 ```
 
+### `dbsql`
+
+Helper utilities for working with SQL databases, providing a unified interface for both `*sql.DB` and `*sql.Tx`.
+
+#### Features
+
+- Defines `Executor` interface that abstracts both `*sql.DB` and `*sql.Tx`
+- Includes helper function `UseExecutor` to seamlessly choose between a database connection and an active transaction
+- Supports all context-aware methods:
+  - `ExecContext`
+  - `QueryRowContext`
+  - `QueryContext`
+
+#### 🔧 Usage
+
+```go
+import (
+    "context"
+    "database/sql"
+    dbsql "github.com/vortex-fintech/go-lib/dbsql"
+)
+
+// Function that works with both DB and Transaction
+func DoSomething(ctx context.Context, exec dbsql.Executor) error {
+    _, err := exec.ExecContext(ctx, "INSERT INTO users (name) VALUES ($1)", "user")
+    return err
+}
+
+func main() {
+    ctx := context.Background()
+
+    db, _ := sql.Open("postgres", "your-connection-string")
+
+    // Use with DB (no active transaction)
+    DoSomething(ctx, dbsql.UseExecutor(db, nil))
+
+    // Use with Transaction if available, falls back to DB
+    tx, _ := db.BeginTx(ctx, nil)
+    err := DoSomething(ctx, dbsql.UseExecutor(db, tx))
+    if err != nil {
+        tx.Rollback()
+        return
+    }
+    tx.Commit()
+}
+```
+
 ---
 
 ### `errors`
@@ -244,6 +291,8 @@ make down        # Stop and remove container
 
 ```
 db/
+├── sql/
+│   ├── helper.go
 └── postgres/
     ├── client.go
     ├── config.go
