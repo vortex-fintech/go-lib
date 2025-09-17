@@ -23,9 +23,14 @@ func TestNewPostgresClient_Integration(t *testing.T) {
 		MaxOpenConns:    5,
 		MaxIdleConns:    2,
 		ConnMaxLifetime: time.Minute,
+		ConnMaxIdleTime: 30 * time.Second,
 	}
 
-	db, err := postgres.NewPostgresClient(context.Background(), cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	db, err := postgres.NewPostgresClient(ctx, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, db)
+	defer db.Close()
 }

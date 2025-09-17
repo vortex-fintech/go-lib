@@ -6,50 +6,59 @@ Reusable Go utilities and infrastructure for internal services at Vortex.
 
 ### `db/postgres`
 
-Simple wrapper to initialize and configure a PostgreSQL connection using `database/sql`.
+Wrapper to initialize and configure a PostgreSQL connection using `database/sql`.
 
 #### 🔧 Usage
 
 ```go
 import (
     "context"
-    "github.com/vortex-fintech/go-lib/db/postgres"
     "time"
+
+    "github.com/vortex-fintech/go-lib/db/postgres"
 )
 
 func main() {
     cfg := postgres.DBConfig{
         Host:            "localhost",
-        Port:            "5432",
-        User:            "user",
-        Password:        "pass",
-        DBName:          "example",
+        Port:            "5433",
+        User:            "testuser",
+        Password:        "testpass",
+        DBName:          "testdb",
         SSLMode:         "disable",
         MaxOpenConns:    10,
         MaxIdleConns:    5,
-        ConnMaxLifetime: 30 * time.Minute,
+        ConnMaxLifetime: 10 * time.Minute,
+        ConnMaxIdleTime: 2 * time.Minute,
     }
 
-    db, err := postgres.NewPostgresClient(context.Background(), cfg)
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    db, err := postgres.NewPostgresClient(ctx, cfg)
     if err != nil {
-        log.Fatal(err)
+        panic(err)
     }
     defer db.Close()
 }
 ```
 
+Notes:
+- The client pings the DB with the provided context; on ping error it closes the connection and returns the error.
+- `ConnMaxIdleTime` is supported in addition to `ConnMaxLifetime`.
+
 ### `dbsql`
 
-Helper utilities for working with SQL databases, providing a unified interface for both `*sql.DB` and `*sql.Tx`.
+Helpers for working with SQL databases, providing a unified interface for both `*sql.DB` and `*sql.Tx`.
 
 #### Features
 
-- Defines `Executor` interface that abstracts both `*sql.DB` and `*sql.Tx`
-- Includes helper function `UseExecutor` to seamlessly choose between a database connection and an active transaction
-- Supports all context-aware methods:
+- `Executor` interface abstracts both `*sql.DB` and `*sql.Tx`
+- `UseExecutor` to choose between a DB and an active transaction
+- Context-aware methods:
   - `ExecContext`
-  - `QueryRowContext`
   - `QueryContext`
+  - `QueryRowContext`
 
 #### 🔧 Usage
 
@@ -57,31 +66,32 @@ Helper utilities for working with SQL databases, providing a unified interface f
 import (
     "context"
     "database/sql"
-    dbsql "github.com/vortex-fintech/go-lib/dbsql"
+
+    dbsql "github.com/vortex-fintech/go-lib/db/dbsql"
 )
 
-// Function that works with both DB and Transaction
 func DoSomething(ctx context.Context, exec dbsql.Executor) error {
     _, err := exec.ExecContext(ctx, "INSERT INTO users (name) VALUES ($1)", "user")
     return err
 }
 
-func main() {
-    ctx := context.Background()
-
-    db, _ := sql.Open("postgres", "your-connection-string")
-
-    // Use with DB (no active transaction)
-    DoSomething(ctx, dbsql.UseExecutor(db, nil))
-
-    // Use with Transaction if available, falls back to DB
-    tx, _ := db.BeginTx(ctx, nil)
-    err := DoSomething(ctx, dbsql.UseExecutor(db, tx))
-    if err != nil {
-        tx.Rollback()
-        return
+func example(ctx context.Context, db *sql.DB) error {
+    // use DB directly
+    if err := DoSomething(ctx, dbsql.UseExecutor(db, nil)); err != nil {
+        return err
     }
-    tx.Commit()
+
+    // use Tx
+    tx, err := db.BeginTx(ctx, nil)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
+    if err := DoSomething(ctx, dbsql.UseExecutor(db, tx)); err != nil {
+        return err
+    }
+    return tx.Commit()
 }
 ```
 

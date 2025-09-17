@@ -21,12 +21,14 @@ func NewPostgresClient(ctx context.Context, cfg DBConfig) (*sql.DB, error) {
 	}
 
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 
 	return db, nil
 }
