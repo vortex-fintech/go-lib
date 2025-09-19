@@ -246,6 +246,128 @@ func main() {
 
 ---
 
+### `graceful/shutdown`
+
+Unified graceful start/stop manager for coordinating multiple servers (HTTP, gRPC, etc.).
+
+#### Features
+
+- Central orchestration of serving and coordinated shutdown across many servers
+- Differentiates between normal (expected) serve errors (e.g. `http.ErrServerClosed`) and fatal errors
+- Graceful timeout after which a force stop is executed
+- Optional OS signal handling (SIGINT, SIGTERM)
+- Pluggable logging callback (integrate zap / zerolog / custom)
+- Optional Prometheus metrics export
+- Extensible normal error predicate (`IsNormalError`)
+- Adapters pattern for HTTP, gRPC (and you can add your own)
+
+#### 🔧 Quickstart
+
+```go
+import (
+    "context"
+    "net"
+    "net/http"
+    "time"
+
+    "github.com/vortex-fintech/go-lib/graceful/shutdown"
+    "github.com/vortex-fintech/go-lib/graceful/shutdown/adapters" // HTTP / gRPC adapters
+)
+
+func main() {
+    // 1) HTTP server
+    mux := http.NewServeMux()
+    mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusOK)
+    })
+    httpSrv := &http.Server{Handler: mux}
+    httpLn, _ := net.Listen("tcp", ":8080")
+
+    // 2) gRPC server (example)
+    // grpcSrv := grpc.NewServer()
+    // grpcLn, _ := net.Listen("tcp", ":9090")
+
+    // 3) Manager
+    mgr := shutdown.New(shutdown.Config{
+        ShutdownTimeout: 15 * time.Second, // grace period
+        HandleSignals:   true,             // catch SIGINT/SIGTERM
+        Logger: func(level, msg string, kv ...any) {
+            // integrate your structured logger here
+            // log.With(kv...).Log(level, msg)
+        },
+        // IsNormalError: override if you need to extend default classification
+        // IsNormalError: func(err error) bool { return shutdown.DefaultIsNormalErr(err) },
+    })
+
+    // 4) Register servers via adapters
+    mgr.Add(&adapters.HTTP{Srv: httpSrv, Lis: httpLn, NameStr: "http"})
+    // mgr.Add(&adapters.GRPC{Srv: grpcSrv, Lis: grpcLn, NameStr: "grpc"})
+
+    // 5) Run (blocking)
+    if err := mgr.Run(context.Background()); err != nil {
+        // fatal (non-normal) error that triggered shutdown
+        // log.Error("shutdown failed", "err", err)
+    }
+}
+```
+
+#### 🧰 Prometheus Metrics (optional)
+
+```go
+import (
+    "net/http"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+
+    "github.com/vortex-fintech/go-lib/graceful/shutdown"
+)
+
+reg := prometheus.NewRegistry()
+pm  := shutdown.NewPromMetrics(reg, "vortex", "graceful")
+
+mgr := shutdown.New(shutdown.Config{
+    ShutdownTimeout: 15 * time.Second,
+    HandleSignals:   true,
+    Logger:          myLogger,
+    Metrics:         pm, // enable metrics
+})
+
+// Expose metrics (could be a separate server)
+go func() {
+    _ = http.ListenAndServe(":9100", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+}()
+```
+
+Exported metrics (label cardinality kept low):
+
+```
+vortex_graceful_graceful_stop_total{result="success|force"}
+vortex_graceful_server_serve_errors_total{name}
+vortex_graceful_server_stop_result_total{name,result="success|force"}
+vortex_graceful_graceful_duration_seconds (histogram)
+```
+
+#### 🔌 Adapters
+
+- `adapters.HTTP`: graceful via `(*http.Server).Shutdown(ctx)`, force via `Close()`. Respects `BaseContext` if set for request scoping.
+- `adapters.GRPC`: graceful via `(*grpc.Server).GracefulStop()`, force via `Stop()`.
+
+You can implement your own by satisfying the adapter interface (see package).
+
+#### ☸️ Kubernetes Recommendations
+
+- `terminationGracePeriodSeconds` ≥ `ShutdownTimeout` + 5–10s buffer (gives time for force path and network propagation).
+- Optional `preStop` hook:
+  - HTTP: call a `/drain` endpoint to flip readiness (stop new traffic) before SIGTERM.
+  - gRPC: stop accepting new streams / connections before SIGTERM.
+- Probes:
+  - `livenessProbe`: only fails on unrecoverable internal faults.
+  - `readinessProbe`: must return NOT ready during graceful phase to drain traffic.
+- Signals: with `HandleSignals: true` the manager listens to SIGINT/SIGTERM and initiates graceful shutdown automatically.
+
+---
+
 ## 🧪 Testing
 
 This project supports **unit** and **integration** tests with proper separation via Go build tags.
@@ -327,6 +449,9 @@ validator/
     ├── validator.go
     ├── tagmap.go
     ├── validator_test.go
+graceful/
+    ├── shutdown/
+        ├── (manager, adapters, metrics)
 ```
 
 ## 🛠️ Dependencies
@@ -337,3 +462,4 @@ validator/
 - [grpc](https://github.com/grpc/grpc-go)
 - [cenkalti/backoff](https://github.com/cenkalti/backoff)
 - [go-playground/validator](https://github.com/go-playground/validator)
+- [prometheus/client_golang](https://github.com/prometheus/client_golang)
