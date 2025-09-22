@@ -394,3 +394,64 @@ func Test_StopBeforeRun_NoPanic(t *testing.T) {
 		t.Fatalf("expected nil, got %v", err)
 	}
 }
+
+func Test_Stop_PerServerTimeouts_DoNotMislabelSuccess(t *testing.T) {
+	t.Parallel()
+
+	met := newFakeMetrics()
+
+	// Общий таймаут 120ms
+	m := New(Config{ShutdownTimeout: 120 * time.Millisecond, Metrics: met})
+
+	// s1 успевает (graceDelay 40ms)
+	s1 := newFakeServer("fast")
+	s1.waitForCtx = true
+	s1.graceDelay = 40 * time.Millisecond
+
+	// s2 не успевает (graceDelay 300ms -> DEADLINE)
+	s2 := newFakeServer("slow")
+	s2.waitForCtx = true
+	s2.graceDelay = 300 * time.Millisecond
+	// имитируем, что его Graceful вернёт context deadline exceeded
+	// (наш fakeServer как раз вернёт ctx.Err(), когда дедлайн истечёт)
+
+	m.Add(s1)
+	m.Add(s2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	// Дадим стартануть и сразу отменим, чтобы запустился Stop()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+
+	// Проверяем классификацию:
+	if got := met.serverStopResult["fast"]["success"]; got < 1 {
+		t.Fatalf("expected fast=success, got %d", got)
+	}
+	if got := met.serverStopResult["slow"]["force"]; got < 1 {
+		t.Fatalf("expected slow=force, got %d", got)
+	}
+	// Глобально хотя бы один force → stopTotal{force} инкрементится
+	if got := met.stopTotal["force"]; got < 1 {
+		t.Fatalf("expected global force, got %d", got)
+	}
+}
+
+// На всякий случай убеждаемся, что ошибка дедлайна действительно идёт как ошибка graceful
+func Test_fakeServer_GracefulDeadlineProducesError(t *testing.T) {
+	t.Parallel()
+	s := newFakeServer("x")
+	s.waitForCtx = true
+	s.graceDelay = 200 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := s.GracefulStopWithTimeout(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected deadline/canceled error, got %v", err)
+	}
+}

@@ -1,3 +1,5 @@
+//go:build unit
+
 package adapters
 
 import (
@@ -69,5 +71,21 @@ func TestGRPCAdapter_ForceStop(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Serve did not exit after ForceStop")
+	}
+}
+
+func TestGRPCAdapter_DefaultName(t *testing.T) {
+	t.Parallel()
+	ad := &GRPC{Srv: grpc.NewServer()}
+	if got := ad.Name(); got != "grpc" {
+		t.Fatalf("expected default name 'grpc', got %q", got)
+	}
+}
+
+func TestGRPCAdapter_CustomName(t *testing.T) {
+	t.Parallel()
+	ad := &GRPC{Srv: grpc.NewServer(), NameStr: "my-grpc"}
+	if got := ad.Name(); got != "my-grpc" {
+		t.Fatalf("expected custom name 'my-grpc', got %q", got)
 	}
 }

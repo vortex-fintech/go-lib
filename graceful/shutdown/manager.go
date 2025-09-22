@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
 )
 
 type Server interface {
@@ -133,41 +134,53 @@ func (m *Manager) Stop() {
 	started := time.Now()
 	var forcedAny atomic.Bool
 
-	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.ShutdownTimeout)
-	defer cancel()
+	// Глобальный дедлайн
+	globalCtx, globalCancel := context.WithTimeout(context.Background(), m.cfg.ShutdownTimeout)
+	defer globalCancel()
 
-	var wg sync.WaitGroup
+	deadline, hasDeadline := globalCtx.Deadline()
+
+	// Вместо sync.WaitGroup — errgroup
+	g, _ := errgroup.WithContext(globalCtx)
+
 	for _, s := range m.servers {
 		srv := s
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		g.Go(func() error {
 			name := safeName(srv)
-			if err := srv.GracefulStopWithTimeout(ctx); err != nil {
+
+			// Локальный контекст «остатка времени» для сервера
+			var srvCtx context.Context
+			var cancel context.CancelFunc
+			if hasDeadline {
+				srvCtx, cancel = context.WithDeadline(context.Background(), deadline)
+			} else {
+				srvCtx, cancel = context.WithCancel(context.Background())
+			}
+			defer cancel()
+
+			// Пытаемся graceful в рамках локального контекста
+			if err := srv.GracefulStopWithTimeout(srvCtx); err != nil {
 				m.cfg.Logger("WARN", "graceful stop error; forcing", "name", name, "err", err)
 				srv.ForceStop()
 				forcedAny.Store(true)
 				if m.cfg.Metrics != nil {
 					m.cfg.Metrics.IncServerStopResult(name, "force")
 				}
-				return
+				return nil
 			}
-			if ctx.Err() != nil {
-				m.cfg.Logger("WARN", "graceful stop deadline exceeded; forcing", "name", name)
-				srv.ForceStop()
-				forcedAny.Store(true)
-				if m.cfg.Metrics != nil {
-					m.cfg.Metrics.IncServerStopResult(name, "force")
-				}
-				return
-			}
+
+			// Если дошли сюда — сервер сам закрылся в свой дедлайн: это success,
+			// даже если глобальный уже истёк к этому моменту.
 			m.cfg.Logger("INFO", "graceful stop done", "name", name)
 			if m.cfg.Metrics != nil {
 				m.cfg.Metrics.IncServerStopResult(name, "success")
 			}
-		}()
+			return nil
+		})
 	}
-	wg.Wait()
+
+	// Ждем завершения всех горутин
+	_ = g.Wait()
 
 	if m.cfg.Metrics != nil {
 		m.cfg.Metrics.ObserveGracefulDuration(time.Since(started))
@@ -183,13 +196,28 @@ func DefaultIsNormalErr(err error) bool {
 	if err == nil {
 		return true
 	}
+	// gRPC: штатное завершение Serve после Stop/GracefulStop.
+	if errors.Is(err, grpc.ErrServerStopped) {
+		return true
+	}
+
+	// HTTP: штатное завершение.
 	if errors.Is(err, http.ErrServerClosed) {
 		return true
 	}
-	if strings.Contains(err.Error(), "use of closed network connection") {
+
+	// Частые «нормальные» ошибки от сетевых серверов при закрытии листенера.
+	msg := err.Error()
+	if strings.Contains(msg, "use of closed network connection") {
 		return true
 	}
-	if strings.Contains(err.Error(), "Server.Serve failed to complete security handshake") {
+	// Иногда встречается как строка (на случай нестандартной обёртки).
+	if strings.Contains(msg, "the server has been stopped") {
+		return true
+	}
+
+	// gRPC TLS-handshake в момент остановки — тоже не считаем фаталом.
+	if strings.Contains(msg, "Server.Serve failed to complete security handshake") {
 		return true
 	}
 	return false

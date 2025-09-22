@@ -7,87 +7,117 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Options настраивает /metrics и /health.
+// Options определяет, как сконфигурировать хендлеры /metrics и /health.
 type Options struct {
-	Registry      *prometheus.Registry
-	Register      func(reg prometheus.Registerer) error
-	Health        func(ctx context.Context, r *http.Request) error
-	MetricsPath   string
-	HealthPath    string
+	// Registry: если nil — будет создан свой prometheus.NewRegistry().
+	// ВАЖНО: используем *prometheus.Registry, т.к. он реализует и Registerer, и Gatherer.
+	Registry *prometheus.Registry
+
+	// Register вызывается после регистрации стандартных метрик.
+	// Здесь можно регать бизнес-метрики. Возвращаемую ошибку мы намеренно игнорируем,
+	// чтобы не паниковать/не падать при AlreadyRegistered и прочем — ответственность на вызывающем.
+	Register func(reg prometheus.Registerer) error
+
+	// Health — проверка готовности. Если nil — /health всегда OK.
+	// Если задано — вызывается в отдельной горутине с таймаутом HealthTimeout.
+	// При ошибке или таймауте возвращаем 503.
+	Health func(ctx context.Context, r *http.Request) error
+
+	// Пути (дефолты см. ниже).
+	MetricsPath string
+	HealthPath  string
+
+	// Таймаут на Health (по умолчанию 500ms).
 	HealthTimeout time.Duration
 }
 
+// registerCollector регистрирует коллектор и безопасно игнорирует AlreadyRegistered.
 func registerCollector(reg prometheus.Registerer, c prometheus.Collector) {
 	if err := reg.Register(c); err != nil {
 		var are prometheus.AlreadyRegisteredError
 		if errors.As(err, &are) {
-			// Уже зарегистрирован — ок.
 			return
 		}
-		// Иные ошибки игнорируем (или залогируйте снаружи).
 	}
 }
 
-// New создаёт http.Handler для /metrics и /health и возвращает (handler, registry).
+// New собирает mux с /metrics и /health и возвращает его вместе с реестром метрик.
 func New(opts Options) (http.Handler, *prometheus.Registry) {
-	if opts.MetricsPath == "" {
-		opts.MetricsPath = "/metrics"
+	metricsPath := opts.MetricsPath
+	if metricsPath == "" {
+		metricsPath = "/metrics"
 	}
-	if opts.HealthPath == "" {
-		opts.HealthPath = "/health"
+	healthPath := opts.HealthPath
+	if healthPath == "" {
+		healthPath = "/health"
 	}
-	if opts.HealthTimeout <= 0 {
-		opts.HealthTimeout = 500 * time.Millisecond
+	ht := opts.HealthTimeout
+	if ht <= 0 {
+		ht = 500 * time.Millisecond
 	}
-
 	reg := opts.Registry
 	if reg == nil {
 		reg = prometheus.NewRegistry()
 	}
 
-	// Стандартные метрики процесса/рантайма.
-	registerCollector(reg, prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	registerCollector(reg, prometheus.NewGoCollector())
+	// Регистрируем стандартные метрики процесса и рантайма.
+	// Используем registerCollector, чтобы молча игнорировать AlreadyRegistered.
+	registerCollector(reg, collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	registerCollector(reg, collectors.NewGoCollector())
 
-	// Бизнес-метрики сервиса.
+	// Пользовательские метрики.
 	if opts.Register != nil {
 		_ = opts.Register(reg)
 	}
 
 	mux := http.NewServeMux()
 
-	// /metrics
-	mux.Handle(opts.MetricsPath, promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	// /metrics — пускаем только GET/HEAD.
+	mux.Handle(metricsPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		promhttp.HandlerFor(reg, promhttp.HandlerOpts{
+			EnableOpenMetrics: true,
+		}).ServeHTTP(w, r)
+	}))
 
-	// /health с форс-таймаутом.
-	mux.HandleFunc(opts.HealthPath, func(w http.ResponseWriter, r *http.Request) {
+	// /health — если Health не задан, возвращаем OK; иначе уважаем таймаут.
+	mux.Handle(healthPath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		if opts.Health == nil {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("OK"))
 			return
 		}
-
-		ctx, cancel := context.WithTimeout(r.Context(), opts.HealthTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), ht)
 		defer cancel()
 
-		errCh := make(chan error, 1)
-		go func() { errCh <- opts.Health(ctx, r) }()
+		done := make(chan error, 1)
+		go func() {
+			done <- opts.Health(ctx, r)
+		}()
 
 		select {
-		case err := <-errCh:
+		case err := <-done:
 			if err != nil {
-				http.Error(w, "UNHEALTHY: "+err.Error(), http.StatusServiceUnavailable)
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("OK"))
 		case <-ctx.Done():
-			http.Error(w, "UNHEALTHY: health timeout", http.StatusServiceUnavailable)
+			http.Error(w, "health check timeout", http.StatusServiceUnavailable)
 		}
-	})
+	}))
 
 	return mux, reg
 }

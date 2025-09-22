@@ -1,3 +1,5 @@
+//go:build unit
+
 package adapters
 
 import (
@@ -171,5 +173,21 @@ func TestHTTPAdapter_Inflight_Request_Finishes_OnGraceful(t *testing.T) {
 	case <-serveErr:
 	case <-time.After(time.Second):
 		t.Fatal("Serve did not exit after graceful stop")
+	}
+}
+
+func TestHTTPAdapter_DefaultName(t *testing.T) {
+	t.Parallel()
+	ad := &HTTP{Srv: &http.Server{}}
+	if got := ad.Name(); got != "http" {
+		t.Fatalf("expected default name 'http', got %q", got)
+	}
+}
+
+func TestHTTPAdapter_CustomName(t *testing.T) {
+	t.Parallel()
+	ad := &HTTP{Srv: &http.Server{}, NameStr: "my-http"}
+	if got := ad.Name(); got != "my-http" {
+		t.Fatalf("expected custom name 'my-http', got %q", got)
 	}
 }
