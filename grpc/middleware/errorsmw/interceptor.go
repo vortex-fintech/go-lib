@@ -31,14 +31,7 @@ func Unary(opts ...Option) grpc.UnaryServerInterceptor {
 	for _, f := range opts {
 		f(&o)
 	}
-
-	return func(
-		ctx context.Context,
-		req any,
-		info *grpc.UnaryServerInfo,
-		handler grpc.UnaryHandler,
-	) (any, error) {
-
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		resp, err := handler(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -54,14 +47,7 @@ func Stream(opts ...Option) grpc.StreamServerInterceptor {
 	for _, f := range opts {
 		f(&o)
 	}
-
-	return func(
-		srv any,
-		ss grpc.ServerStream,
-		info *grpc.StreamServerInfo,
-		handler grpc.StreamHandler,
-	) error {
-
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if err := handler(srv, ss); err != nil {
 			return toGRPC(err, o.Fallback)
 		}
@@ -70,21 +56,30 @@ func Stream(opts ...Option) grpc.StreamServerInterceptor {
 }
 
 func toGRPC(err error, fallback func(error) error) error {
+	// Уже gRPC status?
 	if _, ok := status.FromError(err); ok {
 		return err
 	}
-
+	// Наш тип с ToGRPC()
 	var conv grpcConvertible
 	if errors.As(err, &conv) {
 		return conv.ToGRPC()
 	}
-
+	// Один доменный
+	if gliberrors.IsDomainError(err) {
+		return gliberrors.ConvertDomainToValidation(err).ToGRPC()
+	}
+	// Батч доменных
+	if de, ok := err.(gliberrors.DomainErrors); ok {
+		return gliberrors.ConvertDomainErrorsToValidation(de).ToGRPC()
+	}
+	// Контекст
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, "Request canceled")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.DeadlineExceeded, "Deadline exceeded")
 	}
-
+	// Фоллбек
 	return fallback(err)
 }

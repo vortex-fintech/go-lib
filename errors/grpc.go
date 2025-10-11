@@ -7,14 +7,14 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
-// ToGRPC — ErrorResponse → gRPC error с ErrorInfo + BadRequest (если нужно).
 func (e ErrorResponse) ToGRPC() error {
 	st := status.New(e.Code, e.Message)
 
-	// ErrorInfo: reason + metadata
-	if e.Reason != "" || len(e.Details) > 0 {
+	// ErrorInfo: reason + metadata + domain (если задан)
+	if e.Reason != "" || len(e.Details) > 0 || e.Domain != "" {
 		ei := &errdetails.ErrorInfo{
 			Reason:   string(e.Reason),
+			Domain:   e.Domain,
 			Metadata: map[string]string{},
 		}
 		for k, v := range e.Details {
@@ -25,7 +25,7 @@ func (e ErrorResponse) ToGRPC() error {
 		}
 	}
 
-	// BadRequest: field violations (только для InvalidArgument)
+	// BadRequest для InvalidArgument
 	if len(e.Violations) > 0 && e.Code == codes.InvalidArgument {
 		br := &errdetails.BadRequest{
 			FieldViolations: make([]*errdetails.BadRequest_FieldViolation, 0, len(e.Violations)),
@@ -48,7 +48,6 @@ func (e ErrorResponse) ToGRPC() error {
 	return st.Err()
 }
 
-// FromGRPC — обратное преобразование gRPC error → ErrorResponse.
 func FromGRPC(err error) ErrorResponse {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -60,6 +59,9 @@ func FromGRPC(err error) ErrorResponse {
 		case *errdetails.ErrorInfo:
 			if x.GetReason() != "" {
 				out.Reason = Reason(x.GetReason())
+			}
+			if dom := x.GetDomain(); dom != "" {
+				out.Domain = dom
 			}
 			if md := x.GetMetadata(); len(md) > 0 {
 				out = out.WithDetails(md)

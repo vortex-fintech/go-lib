@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	gliberrors "github.com/vortex-fintech/go-lib/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -59,5 +60,25 @@ func TestUnary_CustomFallback(t *testing.T) {
 	})
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("want ResourceExhausted, got %v", err)
+	}
+}
+
+func TestToGRPC_DomainErrorsBatch(t *testing.T) {
+	de := gliberrors.DomainErrors{
+		{Field: "email", Reason: "invalid_email"},
+		{Field: "password", Reason: "too_short"},
+	}
+	out := toGRPC(de, func(error) error { return nil })
+	st, _ := status.FromError(out)
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("domain batch should map to InvalidArgument")
+	}
+}
+
+func TestToGRPC_PassthroughAndContext(t *testing.T) {
+	out := toGRPC(context.Canceled, func(error) error { return nil })
+	st, _ := status.FromError(out)
+	if st.Code() != codes.Canceled {
+		t.Fatalf("context.Canceled → Canceled expected")
 	}
 }

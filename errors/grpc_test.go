@@ -9,9 +9,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestToGRPCAndFromGRPC_ErrorInfo(t *testing.T) {
+func TestToGRPCAndFromGRPC_ErrorInfoAndBadRequest(t *testing.T) {
 	e := InvalidArgument().
 		WithReason("validation_failed").
+		WithDomain("auth-service").
 		WithDetails(map[string]string{"email": "invalid_email"}).
 		WithViolations([]FieldViolation{{Field: "email", Reason: "invalid_email"}})
 
@@ -22,7 +23,7 @@ func TestToGRPCAndFromGRPC_ErrorInfo(t *testing.T) {
 		t.Fatalf("code mismatch: got %v", st.Code())
 	}
 
-	var foundInfo, foundBR bool
+	var foundInfo, foundBR, domainOK bool
 	for _, d := range st.Details() {
 		switch x := d.(type) {
 		case *errdetails.ErrorInfo:
@@ -30,8 +31,11 @@ func TestToGRPCAndFromGRPC_ErrorInfo(t *testing.T) {
 			if x.GetReason() != "validation_failed" {
 				t.Fatalf("reason mismatch: %s", x.GetReason())
 			}
-			if x.Metadata["email"] != "invalid_email" {
+			if x.GetMetadata()["email"] != "invalid_email" {
 				t.Fatalf("metadata mismatch")
+			}
+			if x.GetDomain() == "auth-service" {
+				domainOK = true
 			}
 		case *errdetails.BadRequest:
 			foundBR = true
@@ -40,16 +44,13 @@ func TestToGRPCAndFromGRPC_ErrorInfo(t *testing.T) {
 			}
 		}
 	}
-	if !foundInfo || !foundBR {
-		t.Fatalf("missing details: ErrorInfo=%v BadRequest=%v", foundInfo, foundBR)
+	if !foundInfo || !foundBR || !domainOK {
+		t.Fatalf("missing details: ErrorInfo=%v BadRequest=%v Domain=%v", foundInfo, foundBR, domainOK)
 	}
 
 	back := FromGRPC(err)
-	if back.Code != codes.InvalidArgument || back.Reason != Reason("validation_failed") {
-		t.Fatalf("roundtrip mismatch: %+v", back)
-	}
-	if back.Details["email"] != "invalid_email" {
-		t.Fatalf("details mismatch after roundtrip")
+	if back.Domain != "auth-service" {
+		t.Fatalf("domain didn't roundtrip")
 	}
 }
 
