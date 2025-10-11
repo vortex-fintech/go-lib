@@ -6,6 +6,7 @@ import (
 
 	gliberrors "github.com/vortex-fintech/go-lib/errors"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -25,7 +26,7 @@ func WithFallback(f func(error) error) Option {
 
 func Unary(opts ...Option) grpc.UnaryServerInterceptor {
 	o := Options{
-		Fallback: func(_ error) error { return gliberrors.InternalError.ToGRPC() },
+		Fallback: func(_ error) error { return gliberrors.Internal().ToGRPC() },
 	}
 	for _, f := range opts {
 		f(&o)
@@ -42,16 +43,48 @@ func Unary(opts ...Option) grpc.UnaryServerInterceptor {
 		if err == nil {
 			return resp, nil
 		}
-
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-
-		var conv grpcConvertible
-		if errors.As(err, &conv) {
-			return nil, conv.ToGRPC()
-		}
-
-		return nil, o.Fallback(err)
+		return nil, toGRPC(err, o.Fallback)
 	}
+}
+
+func Stream(opts ...Option) grpc.StreamServerInterceptor {
+	o := Options{
+		Fallback: func(_ error) error { return gliberrors.Internal().ToGRPC() },
+	}
+	for _, f := range opts {
+		f(&o)
+	}
+
+	return func(
+		srv any,
+		ss grpc.ServerStream,
+		info *grpc.StreamServerInfo,
+		handler grpc.StreamHandler,
+	) error {
+
+		if err := handler(srv, ss); err != nil {
+			return toGRPC(err, o.Fallback)
+		}
+		return nil
+	}
+}
+
+func toGRPC(err error, fallback func(error) error) error {
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
+
+	var conv grpcConvertible
+	if errors.As(err, &conv) {
+		return conv.ToGRPC()
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return status.Error(codes.Canceled, "Request canceled")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return status.Error(codes.DeadlineExceeded, "Deadline exceeded")
+	}
+
+	return fallback(err)
 }
