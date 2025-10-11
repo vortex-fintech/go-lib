@@ -2,33 +2,84 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
+	"net/url"
+	"strings"
+	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var OpenSQL = sql.Open
+// test hooks (подменяемы в unit-тестах)
+var (
+	newPool  = pgxpool.NewWithConfig
+	pingPool = func(ctx context.Context, p *pgxpool.Pool) error { return p.Ping(ctx) }
+)
 
-func NewPostgresClient(ctx context.Context, cfg DBConfig) (*sql.DB, error) {
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.DBName, cfg.SSLMode,
-	)
+type Client struct {
+	Pool *pgxpool.Pool
+}
 
-	db, err := OpenSQL("postgres", dsn)
+func Open(ctx context.Context, cfg Config) (*Client, error) {
+	pcfg, err := pgxpool.ParseConfig(buildURL(cfg))
 	if err != nil {
 		return nil, err
 	}
 
-	if err := db.PingContext(ctx); err != nil {
-		_ = db.Close()
+	if cfg.MaxConns > 0 {
+		pcfg.MaxConns = cfg.MaxConns
+	}
+	pcfg.MinConns = cfg.MinConns
+	if cfg.MaxConnLifetime > 0 {
+		pcfg.MaxConnLifetime = cfg.MaxConnLifetime
+	}
+	if cfg.MaxConnIdleTime > 0 {
+		pcfg.MaxConnIdleTime = cfg.MaxConnIdleTime
+	}
+	if cfg.HealthCheckPeriod > 0 {
+		pcfg.HealthCheckPeriod = cfg.HealthCheckPeriod
+	}
+
+	pool, err := newPool(ctx, pcfg)
+	if err != nil {
 		return nil, err
 	}
 
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	// быстрый health-check
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := pingPool(pingCtx, pool); err != nil {
+		if pool != nil {
+			pool.Close()
+		}
+		return nil, err
+	}
 
-	return db, nil
+	return &Client{Pool: pool}, nil
+}
+
+func (c *Client) Close() {
+	if c != nil && c.Pool != nil {
+		c.Pool.Close()
+	}
+}
+
+func buildURL(cfg Config) string {
+	if strings.TrimSpace(cfg.URL) == "" {
+		return ""
+	}
+	if len(cfg.Params) == 0 {
+		return cfg.URL
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil {
+		return cfg.URL
+	}
+	q := u.Query()
+	for k, v := range cfg.Params {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }

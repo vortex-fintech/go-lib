@@ -1,10 +1,15 @@
 APP_NAME := go-lib
 PKG := ./...
-DC := docker-compose -f db/postgres/docker-compose.test.yml
+DC := docker compose -f db/postgres/docker-compose.test.yml
 CONTAINER := go-lib-test-postgres
 
-.PHONY: all tidy build test test-integration up down wait-db test-all test-race cover test-integration-core
+# Используем bash (Git Bash / WSL)
+SHELL := bash
+.SHELLFLAGS := -lc
 
+.PHONY: all tidy build test test-integration test-integration-core test-all test-race cover up wait-db down
+
+# === Базовые ===
 all: tidy build
 
 tidy:
@@ -13,41 +18,46 @@ tidy:
 build:
 	go build -v $(PKG)
 
-# Юнит-тесты (в т.ч. Name() и т.п.)
+# === Тесты ===
+# Юнит-тесты (включая testhooks)
 test:
-	go test -tags=unit -v $(PKG)
+	go test -count=1 -tags=unit -v $(PKG)
+	go test -count=1 -tags="unit testhooks" -v ./db/postgres
 
-# Интеграция (Manager+gRPC, сигнал на Unix). Если не нужен Postgres — используй test-integration-core.
+# Интеграция с Postgres
 test-integration: up wait-db
-	go test -tags=integration -v $(PKG)
-	$(MAKE) down
+	@set -e; \
+	go test -count=1 -tags=integration -v $(PKG); \
+	status=$$?; \
+	$(DC) down -v; \
+	exit $$status
 
-# Интеграция без инфраструктуры (если БД не требуется)
+# Интеграция без инфраструктуры
 test-integration-core:
-	go test -tags=integration -v $(PKG)
+	go test -count=1 -tags=integration -v $(PKG)
 
-# Последовательно все тесты
+# Все тесты по порядку
 test-all:
 	$(MAKE) test
 	$(MAKE) test-integration
 
-# С гонщиком
+# С гонщиком (race)
 test-race:
-	go test -race -tags=unit $(PKG)
-	go test -race -tags=integration $(PKG)
+	go test -race -count=1 -tags=unit $(PKG)
+	go test -race -count=1 -tags="unit testhooks" -v ./db/postgres
 
-# Покрытие по юнитам (при желании добавь интеграцию отдельно)
+# Покрытие
 cover:
-	go test -coverprofile=coverage.out -tags=unit $(PKG)
+	go test -count=1 -coverprofile=coverage.out -tags=unit $(PKG)
+	go test -count=1 -coverprofile=coverage.dbpgx.out -tags="unit testhooks" ./db/postgres
 	go tool cover -html=coverage.out -o coverage.html
-	@echo "Open coverage.html in your browser"
+	@echo "Открой coverage.html в браузере."
 
+# === Инфраструктура ===
 up:
-	$(DC) up -d
+	$(DC) up -d --wait --wait-timeout 60
+
+wait-db: ; @echo "Postgres is up (compose --wait handled it)."
 
 down:
-	$(DC) down
-
-wait-db:
-	@echo "Waiting for Postgres to be healthy..."
-	@until docker inspect --format='{{.State.Health.Status}}' $(CONTAINER) | grep -q healthy; do sleep 1; done
+	$(DC) down -v

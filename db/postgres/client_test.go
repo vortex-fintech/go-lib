@@ -1,161 +1,83 @@
-//go:build unit
-// +build unit
+//go:build unit && testhooks
+// +build unit,testhooks
 
 package postgres_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
-	"github.com/vortex-fintech/go-lib/db/postgres"
+	"github.com/vortex-fintech/go-lib/db/postgres" // ваш путь к пакету dbpgx (у вас он называется postgres)
 )
 
-func TestNewPostgresClient_Success(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	require.NoError(t, err)
-	defer db.Close()
+func TestOpen_Success(t *testing.T) {
+	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+		// создаём real config -> создаём in-memory пул нельзя, поэтому вернём nil + подмена ping вернёт успех
+		return (*pgxpool.Pool)(nil), nil
+	})
+	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return nil })
+	t.Cleanup(func() {
+		postgres.TestHookSetNewPool(origNewPool)
+		postgres.TestHookSetPingPool(origPing)
+	})
 
-	mock.ExpectPing()
-
-	cfg := postgres.DBConfig{
-		Host:            "localhost",
-		Port:            "5432",
-		User:            "user",
-		Password:        "pass",
-		DBName:          "testdb",
-		SSLMode:         "disable",
-		MaxOpenConns:    10,
-		MaxIdleConns:    5,
-		ConnMaxLifetime: 10 * time.Minute,
-		ConnMaxIdleTime: 2 * time.Minute,
-	}
-
-	original := postgres.OpenSQL
-	postgres.OpenSQL = func(driverName, dataSourceName string) (*sql.DB, error) {
-		return db, nil
-	}
-	defer func() { postgres.OpenSQL = original }()
-
-	conn, err := postgres.NewPostgresClient(context.Background(), cfg)
-	require.NoError(t, err)
-	require.NotNil(t, conn)
-
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestNewPostgresClient_BuildsDSN_AndPings(t *testing.T) {
-	origOpen := postgres.OpenSQL
-	t.Cleanup(func() { postgres.OpenSQL = origOpen })
-
-	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	var capturedDriver, capturedDSN string
-	postgres.OpenSQL = func(driverName, dsn string) (*sql.DB, error) {
-		capturedDriver = driverName
-		capturedDSN = dsn
-		return db, nil
-	}
-
-	cfg := postgres.DBConfig{
-		Host:            "h",
-		Port:            "5432",
-		User:            "u",
-		Password:        "p",
-		DBName:          "d",
-		SSLMode:         "disable",
-		MaxOpenConns:    7,
-		MaxIdleConns:    3,
-		ConnMaxLifetime: time.Minute,
-		ConnMaxIdleTime: 30 * time.Second,
-	}
-
-	mock.ExpectPing()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	cfg := postgres.Config{URL: "postgres://u:p@h:5432/d?sslmode=disable"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	gotDB, err := postgres.NewPostgresClient(ctx, cfg)
+	c, err := postgres.Open(ctx, cfg)
 	require.NoError(t, err)
-	require.NotNil(t, gotDB)
-
-	require.Equal(t, "postgres", capturedDriver)
-	for _, part := range []string{
-		"host=h",
-		"port=5432",
-		"user=u",
-		"password=p",
-		"dbname=d",
-		"sslmode=disable",
-	} {
-		require.True(t, strings.Contains(capturedDSN, part), "dsn missing part: %s; got=%s", part, capturedDSN)
-	}
-
-	require.NoError(t, mock.ExpectationsWereMet())
+	require.NotNil(t, c)
+	c.Close()
 }
 
-func TestNewPostgresClient_OpenError(t *testing.T) {
-	origOpen := postgres.OpenSQL
-	t.Cleanup(func() { postgres.OpenSQL = origOpen })
+func TestOpen_NewPoolError(t *testing.T) {
+	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+		return nil, errors.New("newpool failed")
+	})
+	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return nil })
+	t.Cleanup(func() {
+		postgres.TestHookSetNewPool(origNewPool)
+		postgres.TestHookSetPingPool(origPing)
+	})
 
-	postgres.OpenSQL = func(driverName, dsn string) (*sql.DB, error) {
-		return nil, errors.New("open failed")
-	}
-
-	cfg := postgres.DBConfig{
-		Host:            "h",
-		Port:            "5432",
-		User:            "u",
-		Password:        "p",
-		DBName:          "d",
-		SSLMode:         "disable",
-		MaxOpenConns:    1,
-		MaxIdleConns:    0,
-		ConnMaxLifetime: 0,
-		ConnMaxIdleTime: 0,
-	}
-
-	_, err := postgres.NewPostgresClient(context.Background(), cfg)
+	cfg := postgres.Config{URL: "postgres://u:p@h:5432/d?sslmode=disable"}
+	_, err := postgres.Open(context.Background(), cfg)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "open failed")
+	require.Contains(t, err.Error(), "newpool failed")
 }
 
-func TestNewPostgresClient_PingError(t *testing.T) {
-	origOpen := postgres.OpenSQL
-	t.Cleanup(func() { postgres.OpenSQL = origOpen })
+func TestOpen_PingError(t *testing.T) {
+	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+		// вернём nil, ping будет вызван с nil — наш хук не использует p
+		return (*pgxpool.Pool)(nil), nil
+	})
+	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return errors.New("ping failed") })
+	t.Cleanup(func() {
+		postgres.TestHookSetNewPool(origNewPool)
+		postgres.TestHookSetPingPool(origPing)
+	})
 
-	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	postgres.OpenSQL = func(driverName, dsn string) (*sql.DB, error) {
-		return db, nil
-	}
-
-	mock.ExpectPing().WillReturnError(errors.New("ping failed"))
-
-	cfg := postgres.DBConfig{
-		Host:            "h",
-		Port:            "5432",
-		User:            "u",
-		Password:        "p",
-		DBName:          "d",
-		SSLMode:         "disable",
-		MaxOpenConns:    1,
-		MaxIdleConns:    0,
-		ConnMaxLifetime: 0,
-		ConnMaxIdleTime: 0,
-	}
-
-	_, err = postgres.NewPostgresClient(context.Background(), cfg)
+	cfg := postgres.Config{URL: "postgres://u:p@h:5432/d?sslmode=disable"}
+	_, err := postgres.Open(context.Background(), cfg)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ping failed")
-	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestConstraint_And_Unique(t *testing.T) {
+	// Сгенерировать *pgconn.PgError вручную
+	pgErr := &pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "users_credentials_email_key",
+	}
+	code, constr, ok := postgres.Constraint(pgErr)
+	require.True(t, ok)
+	require.Equal(t, "23505", code)
+	require.Equal(t, "users_credentials_email_key", constr)
+	require.True(t, postgres.IsUniqueViolation(pgErr))
 }

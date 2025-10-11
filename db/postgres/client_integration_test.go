@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package postgres_test
 
@@ -12,25 +11,25 @@ import (
 	"github.com/vortex-fintech/go-lib/db/postgres"
 )
 
-func TestNewPostgresClient_Integration(t *testing.T) {
-	cfg := postgres.DBConfig{
-		Host:            "localhost",
-		Port:            "5433",
-		User:            "testuser",
-		Password:        "testpass",
-		DBName:          "testdb",
-		SSLMode:         "disable",
-		MaxOpenConns:    5,
-		MaxIdleConns:    2,
-		ConnMaxLifetime: time.Minute,
-		ConnMaxIdleTime: 30 * time.Second,
+func TestOpen_Integration(t *testing.T) {
+	// docker-compose: порт 5433
+	cfg := postgres.Config{
+		URL: "postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable",
+		// можно задать лимиты пула
+		MaxConns: 5, MinConns: 1,
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	db, err := postgres.NewPostgresClient(ctx, cfg)
+	c, err := postgres.Open(ctx, cfg)
 	require.NoError(t, err)
-	require.NotNil(t, db)
-	defer db.Close()
+	require.NotNil(t, c)
+	defer c.Close()
+
+	// простой sanity check
+	run := c.RunnerFromPool()
+	row := run.QueryRow(ctx, "SELECT 1")
+	var x int
+	require.NoError(t, row.Scan(&x))
+	require.Equal(t, 1, x)
 }
