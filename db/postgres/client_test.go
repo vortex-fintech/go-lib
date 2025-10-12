@@ -12,12 +12,12 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
-	"github.com/vortex-fintech/go-lib/db/postgres" // ваш путь к пакету dbpgx (у вас он называется postgres)
+	"github.com/vortex-fintech/go-lib/db/postgres"
 )
 
 func TestOpen_Success(t *testing.T) {
 	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
-		// создаём real config -> создаём in-memory пул нельзя, поэтому вернём nil + подмена ping вернёт успех
+		// вернём nil — ping заменён хуком ниже
 		return (*pgxpool.Pool)(nil), nil
 	})
 	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return nil })
@@ -54,7 +54,6 @@ func TestOpen_NewPoolError(t *testing.T) {
 
 func TestOpen_PingError(t *testing.T) {
 	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
-		// вернём nil, ping будет вызван с nil — наш хук не использует p
 		return (*pgxpool.Pool)(nil), nil
 	})
 	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return errors.New("ping failed") })
@@ -70,14 +69,17 @@ func TestOpen_PingError(t *testing.T) {
 }
 
 func TestConstraint_And_Unique(t *testing.T) {
-	// Сгенерировать *pgconn.PgError вручную
 	pgErr := &pgconn.PgError{
-		Code:           "23505",
+		Code:           postgres.SQLStateUniqueViolation,
 		ConstraintName: "users_credentials_email_key",
 	}
-	code, constr, ok := postgres.Constraint(pgErr)
+
+	info, ok := postgres.Constraint(pgErr)
 	require.True(t, ok)
-	require.Equal(t, "23505", code)
-	require.Equal(t, "users_credentials_email_key", constr)
+	require.Equal(t, postgres.SQLStateUniqueViolation, info.Code)
+	require.Equal(t, "users_credentials_email_key", info.Name)
+	require.True(t, info.IsUnique)
+
+	// заодно проверим шорткат-хелпер
 	require.True(t, postgres.IsUniqueViolation(pgErr))
 }
