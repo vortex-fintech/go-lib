@@ -14,9 +14,4 @@ type Config struct {
 	// Optional: enable periodic reload of certs without process restart.
 	// If zero, reloading is disabled.
 	ReloadInterval time.Duration
-
-	// DEV ONLY: disable server cert verification on client.
-	// Will be allowed only when ENV/APP_ENV/GO_ENV in {dev, development, local}.
-	// Otherwise TLSConfigClient returns an error.
-	InsecureSkipVerify bool
 }
