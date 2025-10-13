@@ -17,10 +17,10 @@ type Options struct {
 	Post []grpc.UnaryServerInterceptor
 
 	// Встроенные
-	AuthzInterceptor *grpc.UnaryServerInterceptor // если nil — не включаем
-	CircuitBreaker   *cb.Interceptor              // если nil — не включаем
-	DisableCtxCancel bool                         // по умолчанию false => включено
-	DisableErrors    bool                         // по умолчанию false => включено
+	AuthzInterceptor grpc.UnaryServerInterceptor // если nil — не включаем
+	CircuitBreaker   *cb.Interceptor             // если nil — не включаем
+	DisableCtxCancel bool                        // по умолчанию false => включено
+	DisableErrors    bool                        // по умолчанию false => включено
 }
 
 // Default возвращает grpc.ServerOption с собранной цепочкой перехватчиков.
@@ -39,7 +39,7 @@ func Default(opts Options) grpc.ServerOption {
 
 	// Авторизация
 	if opts.AuthzInterceptor != nil {
-		chain = append(chain, *opts.AuthzInterceptor)
+		chain = append(chain, opts.AuthzInterceptor)
 	}
 
 	// CircuitBreaker
