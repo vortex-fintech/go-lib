@@ -14,30 +14,38 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Policy описывает требования по скоупам:
-// - All: все перечисленные обязательны
-// - Any: хотя бы один из перечисленных обязателен
+// Policy — требования по скоупам.
 type Policy struct {
-	All []string
-	Any []string
+	All []string // все обязательны
+	Any []string // хотя бы один обязателен
 }
 
 // PolicyResolver возвращает политику по полному имени метода.
 type PolicyResolver func(fullMethod string) Policy
 
+// SkipAuthFunc возвращает true, если метод анонимный (пропускать JWT-проверку).
+type SkipAuthFunc func(fullMethod string) bool
+
 type Config struct {
 	Verifier       libjwt.Verifier
-	Audience       string   // требуемая аудитория для сервиса
-	RequiredScopes []string // глобальные "ALL" для всего сервиса (опционально)
+	Audience       string
+	RequiredScopes []string
 	CheckAudience  libjwt.AudienceChecker
-	ResolvePolicy  PolicyResolver // политика на метод (опционально)
+	ResolvePolicy  PolicyResolver
+	SkipAuth       SkipAuthFunc
 }
 
 func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 	if cfg.CheckAudience == nil {
 		cfg.CheckAudience = libjwt.DefaultAudienceChecker
 	}
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		// анонимные методы
+		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
+			return handler(ctx, req)
+		}
+
+		// jwt + aud + scopes
 		raw, err := bearerFromMD(ctx)
 		if err != nil {
 			return nil, status.Error(codes.Unauthenticated, err.Error())
@@ -68,7 +76,13 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 	if cfg.CheckAudience == nil {
 		cfg.CheckAudience = libjwt.DefaultAudienceChecker
 	}
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		// анонимные методы
+		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
+			return handler(srv, ss)
+		}
+
+		// jwt + aud + scopes
 		ctx := ss.Context()
 		raw, err := bearerFromMD(ctx)
 		if err != nil {
@@ -103,7 +117,6 @@ type serverStream struct {
 
 func (s *serverStream) Context() context.Context { return s.ctx }
 
-// satisfies применяет глобальные "ALL" и методовые "ALL"/"ANY".
 func satisfies(have []string, p Policy, globalAll []string) bool {
 	if len(globalAll) > 0 && !scope.HasAll(have, globalAll...) {
 		return false
