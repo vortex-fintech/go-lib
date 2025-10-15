@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	scope "github.com/vortex-fintech/go-lib/authz/scope"
 	libjwt "github.com/vortex-fintech/go-lib/security/jwt"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -20,32 +23,40 @@ type Policy struct {
 	Any []string // хотя бы один обязателен
 }
 
-// PolicyResolver возвращает политику по полному имени метода.
+// PolicyResolver — политика по полному имени метода.
 type PolicyResolver func(fullMethod string) Policy
 
-// SkipAuthFunc возвращает true, если метод анонимный (пропускать JWT-проверку).
+// SkipAuthFunc — пропустить аутентификацию для метода.
 type SkipAuthFunc func(fullMethod string) bool
 
 type Config struct {
-	Verifier       libjwt.Verifier
-	Audience       string
+	Verifier libjwt.Verifier
+
+	// OBO-политика (ValidateOBO)
+	Audience       string                           // этот сервис, напр. "wallet" (обязателен)
+	Actor          string                           // кто обменял токен, напр. "api-gateway" (желателен)
+	Leeway         time.Duration                    // 30–60s
+	MaxTTL         time.Duration                    // <= 5m
+	RequireScopes  bool                             // требовать непустые scopes
+	SeenJTI        func(string) bool                // anti-replay (может быть nil)
+	RequirePoP     bool                             // требовать PoP (x5t#S256)
+	MTLSThumbprint func(ctx context.Context) string // вернуть x5t#S256 из peer TLS (может быть nil)
+
+	// Доп. авторизация на уровне метода
 	RequiredScopes []string
-	CheckAudience  libjwt.AudienceChecker
 	ResolvePolicy  PolicyResolver
-	SkipAuth       SkipAuthFunc
+
+	// Анонимные методы
+	SkipAuth SkipAuthFunc
 }
 
 func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
-	if cfg.CheckAudience == nil {
-		cfg.CheckAudience = libjwt.DefaultAudienceChecker
-	}
+	cfg = normalize(cfg)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		// анонимные методы
 		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
 			return handler(ctx, req)
 		}
 
-		// jwt + aud + scopes
 		raw, err := bearerFromMD(ctx)
 		if err != nil {
 			return nil, status.Error(codes.Unauthenticated, err.Error())
@@ -54,35 +65,59 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 		if err != nil {
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
-		if cfg.Audience != "" && !cfg.CheckAudience(cl, cfg.Audience) {
-			return nil, status.Error(codes.PermissionDenied, "audience mismatch")
+
+		var thumb string
+		if cfg.MTLSThumbprint != nil {
+			thumb = cfg.MTLSThumbprint(ctx)
+		}
+		if cfg.RequirePoP && thumb == "" {
+			return nil, status.Error(codes.Unauthenticated, "missing mTLS client certificate")
 		}
 
+		// Дальше всё как было — ValidateOBO потребует cnf и сравнит с thumb
+		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
+			WantAudience:   cfg.Audience,
+			WantActor:      cfg.Actor,
+			Leeway:         cfg.Leeway,
+			MaxTTL:         cfg.MaxTTL,
+			MTLSThumbprint: thumb,
+			SeenJTI:        cfg.SeenJTI,
+			RequireScopes:  cfg.RequireScopes,
+		}); err != nil {
+			switch err {
+			case libjwt.ErrExpired, libjwt.ErrIATInFuture:
+				return nil, status.Error(codes.Unauthenticated, err.Error())
+			default:
+				return nil, status.Error(codes.PermissionDenied, err.Error())
+			}
+		}
+
+		// subject гарантированно UUID (ValidateOBO это проверил),
+		// но парсим один раз для Identity
+		uid, _ := uuid.Parse(cl.Subject)
+		sc := cl.EffectiveScopes()
+
+		// Доп. политика на уровне метода (All/Any/RequiredScopes)
 		var p Policy
 		if cfg.ResolvePolicy != nil {
 			p = cfg.ResolvePolicy(info.FullMethod)
 		}
-		if !satisfies(cl.Scopes, p, cfg.RequiredScopes) {
+		if !satisfies(sc, p, cfg.RequiredScopes) {
 			return nil, status.Error(codes.PermissionDenied, "insufficient scope")
 		}
 
-		id := Identity{UserID: cl.Subject, Scopes: cl.Scopes, SID: cl.Sid}
-		ctx = WithIdentity(ctx, id)
-		return handler(ctx, req)
+		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid}
+		return handler(WithIdentity(ctx, id), req)
 	}
 }
 
 func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
-	if cfg.CheckAudience == nil {
-		cfg.CheckAudience = libjwt.DefaultAudienceChecker
-	}
+	cfg = normalize(cfg)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		// анонимные методы
 		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
 			return handler(srv, ss)
 		}
 
-		// jwt + aud + scopes
 		ctx := ss.Context()
 		raw, err := bearerFromMD(ctx)
 		if err != nil {
@@ -92,19 +127,44 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 		if err != nil {
 			return status.Error(codes.Unauthenticated, "invalid token")
 		}
-		if cfg.Audience != "" && !cfg.CheckAudience(cl, cfg.Audience) {
-			return status.Error(codes.PermissionDenied, "audience mismatch")
+
+		var thumb string
+		if cfg.MTLSThumbprint != nil {
+			thumb = cfg.MTLSThumbprint(ctx)
 		}
+		if cfg.RequirePoP && thumb == "" {
+			return status.Error(codes.Unauthenticated, "missing mTLS client certificate")
+		}
+
+		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
+			WantAudience:   cfg.Audience,
+			WantActor:      cfg.Actor,
+			Leeway:         cfg.Leeway,
+			MaxTTL:         cfg.MaxTTL,
+			MTLSThumbprint: thumb,
+			SeenJTI:        cfg.SeenJTI,
+			RequireScopes:  cfg.RequireScopes,
+		}); err != nil {
+			switch err {
+			case libjwt.ErrExpired, libjwt.ErrIATInFuture:
+				return status.Error(codes.Unauthenticated, err.Error())
+			default:
+				return status.Error(codes.PermissionDenied, err.Error())
+			}
+		}
+
+		uid, _ := uuid.Parse(cl.Subject)
+		sc := cl.EffectiveScopes()
 
 		var p Policy
 		if cfg.ResolvePolicy != nil {
 			p = cfg.ResolvePolicy(info.FullMethod)
 		}
-		if !satisfies(cl.Scopes, p, cfg.RequiredScopes) {
+		if !satisfies(sc, p, cfg.RequiredScopes) {
 			return status.Error(codes.PermissionDenied, "insufficient scope")
 		}
 
-		id := Identity{UserID: cl.Subject, Scopes: cl.Scopes, SID: cl.Sid}
+		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid}
 		wrapped := &serverStream{ServerStream: ss, ctx: WithIdentity(ctx, id)}
 		return handler(srv, wrapped)
 	}
@@ -137,11 +197,48 @@ func bearerFromMD(ctx context.Context) (string, error) {
 	}
 	vals := md.Get("authorization")
 	if len(vals) == 0 {
+		vals = md.Get("grpcgateway-authorization")
+	}
+	if len(vals) == 0 {
 		return "", errors.New("missing authorization")
 	}
-	parts := strings.SplitN(vals[0], " ", 2)
+	parts := strings.SplitN(strings.TrimSpace(vals[0]), " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return "", errors.New("invalid authorization")
 	}
 	return parts[1], nil
+}
+
+// Пример извлечения x5t#S256 из peer TLS (для передачи в cfg.MTLSThumbprint)
+func mtlsThumbFromPeer(ctx context.Context) string {
+	pr, ok := peer.FromContext(ctx)
+	if !ok {
+		return ""
+	}
+	if ti, ok := pr.AuthInfo.(credentials.TLSInfo); ok {
+		if len(ti.State.PeerCertificates) > 0 {
+			return libjwt.X5tS256FromCert(ti.State.PeerCertificates[0])
+		}
+	}
+	return ""
+}
+
+func normalize(cfg Config) Config {
+	if cfg.Audience == "" {
+		panic("authz: Audience must be set")
+	}
+	if cfg.Leeway <= 0 {
+		cfg.Leeway = 45 * time.Second
+	}
+	if cfg.MaxTTL <= 0 {
+		cfg.MaxTTL = 5 * time.Minute
+	}
+	if cfg.MTLSThumbprint == nil {
+		cfg.MTLSThumbprint = mtlsThumbFromPeer
+	}
+	// Требуем PoP по умолчанию
+	if !cfg.RequirePoP {
+		cfg.RequirePoP = true
+	}
+	return cfg
 }

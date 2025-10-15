@@ -1,6 +1,10 @@
 package authz
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 // тип для ключей контекста (не экспортируем, чтобы избежать коллизий)
 type ctxKey string
@@ -10,7 +14,7 @@ const keyIdentity ctxKey = "authz.identity"
 
 // Identity — то, что прокидываем в бизнес-логику
 type Identity struct {
-	UserID string
+	UserID uuid.UUID
 	Scopes []string
 	SID    string
 }

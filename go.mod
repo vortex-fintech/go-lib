@@ -5,9 +5,9 @@ go 1.25
 toolchain go1.25.1
 
 require (
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/cenkalti/backoff/v5 v5.0.2
 	github.com/go-playground/validator/v10 v10.27.0
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.14.0

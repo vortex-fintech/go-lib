@@ -7,24 +7,26 @@ import (
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Minimal JWKS client with in-memory cache.
+// JWKS-клиент с in-memory кэшем + поддержкой Cache-Control/ETag.
 
 type JWKSConfig struct {
 	URL            string        // https://sso.internal/.well-known/jwks.json
-	RefreshEvery   time.Duration // e.g. 5m
-	Timeout        time.Duration // http timeout for JWKS fetch
-	ExpectedIssuer string        // optional iss check
+	RefreshEvery   time.Duration // верхняя граница, если нет/большой max-age
+	Timeout        time.Duration // HTTP timeout для JWKS-запроса
+	ExpectedIssuer string        // опциональная проверка iss
 }
 
 type jwk struct {
@@ -46,6 +48,7 @@ type jwksVerifier struct {
 	rsa         map[string]*rsa.PublicKey // kid -> key
 	httpClient  *http.Client
 	nextRefresh time.Time
+	etag        string
 }
 
 func NewJWKSVerifier(cfg JWKSConfig) (Verifier, error) {
@@ -72,11 +75,12 @@ func NewJWKSVerifier(cfg JWKSConfig) (Verifier, error) {
 }
 
 func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) {
+	// мягкий refresh
 	if time.Now().After(v.nextRefresh) {
 		_ = v.refresh(ctx)
 	}
 
-	if len(raw) == 0 || len(raw) > 16*1024 {
+	if l := len(raw); l == 0 || l > 16*1024 {
 		return nil, errors.New("jwt: invalid size")
 	}
 
@@ -85,6 +89,7 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 		return nil, errors.New("jwt: malformed")
 	}
 
+	// Header
 	hdrJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return nil, err
@@ -100,10 +105,12 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if hdr.Kid == "" {
 		return nil, errors.New("jwt: no kid")
 	}
-	if hdr.Alg != "" && hdr.Alg != "RS256" {
+	// Только RS256 (RSA-PKCS1 v1.5 с SHA-256)
+	if hdr.Alg != "RS256" {
 		return nil, errors.New("jwt: unexpected alg")
 	}
 
+	// Ключ по kid
 	key, err := v.keyFor(ctx, hdr.Kid)
 	if err != nil {
 		return nil, err
@@ -118,6 +125,7 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 		return nil, err
 	}
 
+	// Payload
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return nil, err
@@ -127,11 +135,17 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 		return nil, err
 	}
 
+	// Time checks (leeway)
 	const leeway = 5 * time.Second
-	if time.Now().Add(-leeway).After(cl.ExpiresAt()) {
+	now := time.Now()
+	if now.Add(-leeway).After(cl.ExpiresAt()) {
 		return nil, errors.New("jwt: expired")
 	}
+	if cl.Iat > now.Add(leeway).Unix() {
+		return nil, errors.New("jwt: iat in the future")
+	}
 
+	// Optional issuer check
 	if v.cfg.ExpectedIssuer != "" && cl.Issuer != v.cfg.ExpectedIssuer {
 		return nil, errors.New("jwt: unexpected iss")
 	}
@@ -165,14 +179,28 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 		return errors.New("jwks: empty url")
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, v.cfg.URL, nil)
+	if v.etag != "" {
+		req.Header.Set("If-None-Match", v.etag)
+	}
 	resp, err := v.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// ok
+	case http.StatusNotModified:
+		// только обновим nextRefresh по Cache-Control
+		v.mu.Lock()
+		v.nextRefresh = time.Now().Add(v.refreshIntervalFromHeaders(resp.Header))
+		v.mu.Unlock()
+		return nil
+	default:
 		return fmt.Errorf("jwks: http %d", resp.StatusCode)
 	}
+
 	var set jwks
 	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
 		return err
@@ -215,16 +243,45 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 
 	v.mu.Lock()
 	v.rsa = m
-	re := v.cfg.RefreshEvery
-	if re <= 0 {
-		re = 5 * time.Minute
-	}
-	v.nextRefresh = time.Now().Add(re)
+	v.etag = resp.Header.Get("ETag")
+	v.nextRefresh = time.Now().Add(v.refreshIntervalFromHeaders(resp.Header))
 	v.mu.Unlock()
 	return nil
 }
 
-// decodeClaims — tolerant к типам aud/scope (string | []string), совместим с твоим Claims.
+func (v *jwksVerifier) refreshIntervalFromHeaders(h http.Header) time.Duration {
+	// По умолчанию
+	re := v.cfg.RefreshEvery
+	if re <= 0 {
+		re = 5 * time.Minute
+	}
+
+	// Попробуем Cache-Control: max-age=N
+	if cc := h.Get("Cache-Control"); cc != "" {
+		if d, ok := parseMaxAge(cc); ok && d > 0 {
+			if re <= 0 || d < re {
+				re = d
+			}
+		}
+	}
+	return re
+}
+
+func parseMaxAge(cc string) (time.Duration, bool) {
+	// Простейший парсер max-age=NNN
+	for _, part := range strings.Split(cc, ",") {
+		part = strings.TrimSpace(strings.ToLower(part))
+		if strings.HasPrefix(part, "max-age=") {
+			secStr := strings.TrimPrefix(part, "max-age=")
+			if n, err := strconv.ParseInt(secStr, 10, 64); err == nil && n >= 0 {
+				return time.Duration(n) * time.Second, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// decodeClaims — БЕЗ legacy "scope": принимает только "scopes" как массив строк.
 func decodeClaims(payload []byte) (*Claims, error) {
 	type wire struct {
 		Issuer   string   `json:"iss"`
@@ -234,10 +291,13 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Exp      int64    `json:"exp"`
 		Sid      string   `json:"sid,omitempty"`
 		Jti      string   `json:"jti,omitempty"`
-		Scope    any      `json:"scope,omitempty"`
+		Scopes   any      `json:"scopes,omitempty"` // ожидаем массив
 		Azp      string   `json:"azp,omitempty"`
 		ACR      string   `json:"acr,omitempty"`
 		AMR      []string `json:"amr,omitempty"`
+		Act      *Actor   `json:"act,omitempty"`
+		Cnf      *Cnf     `json:"cnf,omitempty"`
+		SrcTH    string   `json:"src_th,omitempty"`
 	}
 	var w wire
 	if err := json.Unmarshal(payload, &w); err != nil {
@@ -254,6 +314,9 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Azp:     w.Azp,
 		ACR:     w.ACR,
 		AMR:     w.AMR,
+		Act:     w.Act,
+		Cnf:     w.Cnf,
+		SrcTH:   w.SrcTH,
 	}
 
 	switch v := w.Audience.(type) {
@@ -271,26 +334,39 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		cl.Audience = append(cl.Audience, v...)
 	}
 
-	switch v := w.Scope.(type) {
-	case string:
-		if v != "" {
-			cl.Scopes = strings.Fields(v)
-		}
-	case []any:
-		for _, it := range v {
-			if s, ok := it.(string); ok && s != "" {
+	// Только массив scopes (строгий режим).
+	switch v := w.Scopes.(type) {
+	case nil:
+		// ок: пусто/не задано — финальное требование решает ValidateOBO (RequireScopes)
+	case []string:
+		for _, s := range v {
+			if s = strings.TrimSpace(s); s != "" {
 				cl.Scopes = append(cl.Scopes, s)
 			}
 		}
-	case []string:
-		cl.Scopes = append(cl.Scopes, v...)
+	case []any:
+		for _, it := range v {
+			if s, ok := it.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					cl.Scopes = append(cl.Scopes, s)
+				}
+			}
+		}
+	default:
+		return nil, errors.New("jwt: scopes must be array of strings")
 	}
 
 	return cl, nil
 }
 
-// verifyRS256 — простая проверка подписи RSA-SHA256.
+// verifyRS256 — проверка подписи RSA-SHA256 (PKCS#1 v1.5).
 func verifyRS256(pub *rsa.PublicKey, payload, sig []byte) error {
 	h := sha256.Sum256(payload)
 	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, h[:], sig)
+}
+
+// X5tS256FromCert — x5t#S256 (base64url без паддинга) из DER-серта.
+func X5tS256FromCert(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
