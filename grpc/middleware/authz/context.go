@@ -14,9 +14,10 @@ const keyIdentity ctxKey = "authz.identity"
 
 // Identity — то, что прокидываем в бизнес-логику
 type Identity struct {
-	UserID uuid.UUID
-	Scopes []string
-	SID    string
+	UserID   uuid.UUID
+	Scopes   []string
+	SID      string
+	DeviceID string
 }
 
 // WithIdentity кладёт всю Identity в context

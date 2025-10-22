@@ -298,6 +298,7 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Act      *Actor   `json:"act,omitempty"`
 		Cnf      *Cnf     `json:"cnf,omitempty"`
 		SrcTH    string   `json:"src_th,omitempty"`
+		DeviceID string   `json:"device_id,omitempty"`
 	}
 	var w wire
 	if err := json.Unmarshal(payload, &w); err != nil {
@@ -305,18 +306,19 @@ func decodeClaims(payload []byte) (*Claims, error) {
 	}
 
 	cl := &Claims{
-		Issuer:  w.Issuer,
-		Subject: w.Subject,
-		Iat:     w.Iat,
-		Exp:     w.Exp,
-		Sid:     w.Sid,
-		Jti:     w.Jti,
-		Azp:     w.Azp,
-		ACR:     w.ACR,
-		AMR:     w.AMR,
-		Act:     w.Act,
-		Cnf:     w.Cnf,
-		SrcTH:   w.SrcTH,
+		Issuer:   w.Issuer,
+		Subject:  w.Subject,
+		Iat:      w.Iat,
+		Exp:      w.Exp,
+		Sid:      w.Sid,
+		Jti:      w.Jti,
+		Azp:      w.Azp,
+		ACR:      w.ACR,
+		AMR:      w.AMR,
+		Act:      w.Act,
+		Cnf:      w.Cnf,
+		SrcTH:    w.SrcTH,
+		DeviceID: w.DeviceID,
 	}
 
 	switch v := w.Audience.(type) {

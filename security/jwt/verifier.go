@@ -65,6 +65,8 @@ type Claims struct {
 	// Контекст аутентификации
 	ACR string   `json:"acr,omitempty"`
 	AMR []string `json:"amr,omitempty"`
+
+	DeviceID string `json:"device_id,omitempty"`
 }
 
 func (c Claims) ExpiresAt() time.Time { return time.Unix(c.Exp, 0) }

@@ -106,7 +106,7 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 			return nil, status.Error(codes.PermissionDenied, "insufficient scope")
 		}
 
-		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid}
+		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID}
 		return handler(WithIdentity(ctx, id), req)
 	}
 }
