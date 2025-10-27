@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	errs "github.com/vortex-fintech/go-lib/errors"
 )
 
 // тип для ключей контекста (не экспортируем, чтобы избежать коллизий)
@@ -36,4 +37,24 @@ func IdentityFrom(ctx context.Context) (Identity, bool) {
 	}
 	id, ok := v.(Identity)
 	return id, ok
+}
+
+// RequireIdentity — достаёт Identity из контекста или вернёт стандартизированную ошибку.
+func RequireIdentity(ctx context.Context) (Identity, error) {
+	id, ok := IdentityFrom(ctx)
+	if !ok || id.UserID == uuid.Nil {
+		return Identity{}, errs.Internal().
+			WithReason("missing_identity").
+			WithDetail("auth", "user identity not found in context")
+	}
+	return id, nil
+}
+
+// RequireUserID — краткий вариант, если нужен только UUID.
+func RequireUserID(ctx context.Context) (uuid.UUID, error) {
+	id, err := RequireIdentity(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return id.UserID, nil
 }
