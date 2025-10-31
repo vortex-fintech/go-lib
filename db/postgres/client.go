@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -47,12 +48,26 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 		pcfg.HealthCheckPeriod = cfg.HealthCheckPeriod
 	}
 
+	// Полезные дефолты: видимость в pg_stat_activity и единая TZ
+	if pcfg.ConnConfig != nil {
+		// v5: runtime params лежат в ConnConfig.Config.RuntimeParams
+		if pcfg.ConnConfig.Config.RuntimeParams == nil {
+			pcfg.ConnConfig.Config.RuntimeParams = map[string]string{}
+		}
+		if _, ok := pcfg.ConnConfig.Config.RuntimeParams["application_name"]; !ok {
+			pcfg.ConnConfig.Config.RuntimeParams["application_name"] = "go-lib-pgxpool"
+		}
+		if _, ok := pcfg.ConnConfig.Config.RuntimeParams["TimeZone"]; !ok {
+			pcfg.ConnConfig.Config.RuntimeParams["TimeZone"] = "UTC"
+		}
+	}
+
 	pool, err := newPool(ctx, pcfg)
 	if err != nil {
 		return nil, err
 	}
 
-	// быстрый health-check
+	// Быстрый health-check
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := pingPool(pingCtx, pool); err != nil {
@@ -69,7 +84,6 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 // Собирает URL внутри и переносит пул-настройки из DBConfig.
 func OpenWithDBConfig(ctx context.Context, dbCfg DBConfig) (*Client, error) {
 	dsn := buildURLFromDB(dbCfg)
-
 	return Open(ctx, Config{
 		URL: dsn,
 		// Маппим настройки пула
@@ -113,10 +127,11 @@ func buildURL(cfg Config) string {
 }
 
 // buildURLFromDB — собирает postgres DSN из структурного DBConfig.
+// IPv6-безопасен благодаря net.JoinHostPort.
 func buildURLFromDB(c DBConfig) string {
 	u := &url.URL{
 		Scheme: "postgres",
-		Host:   fmt.Sprintf("%s:%s", c.Host, c.Port),
+		Host:   net.JoinHostPort(c.Host, c.Port),
 		Path:   "/" + strings.TrimPrefix(c.DBName, "/"),
 	}
 	if c.User != "" || c.Password != "" {

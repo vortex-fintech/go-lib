@@ -1,4 +1,3 @@
-// pgerr.go
 package postgres
 
 import (
@@ -39,7 +38,7 @@ func Constraint(err error) (ConstraintInfo, bool) {
 	return info, true
 }
 
-// Опционально узкие хелперы — иногда удобнее коротко писать в if
+// Узкие хелперы
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == SQLStateUniqueViolation

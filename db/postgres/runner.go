@@ -41,5 +41,8 @@ func (r txRunner) QueryRow(ctx context.Context, q string, args ...any) pgx.Row {
 	return r.tx.QueryRow(ctx, q, args...)
 }
 
+// (опционально)
+func (r txRunner) RawTx() pgx.Tx { return r.tx }
+
 // RunnerFromPool — получить Runner для пула (вне транзакции).
 func (c *Client) RunnerFromPool() Runner { return poolRunner{p: c.Pool} }

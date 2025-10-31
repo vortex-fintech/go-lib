@@ -18,10 +18,11 @@ type DBConfig struct {
 }
 
 // Высокоуровневый конфиг — через готовый URL.
-// Оставляем для беквард-совместимости и особых случаев (например, сложные DSN).
+// Оставляем для кейсов со сложными DSN и обратной совместимости.
 type Config struct {
 	URL    string            // postgres://user:pass@host:port/dbname?sslmode=disable
 	Params map[string]string // доп.параметры для URL (перезаписывают query)
+
 	// Параметры пула
 	MaxConns          int32
 	MinConns          int32
