@@ -36,7 +36,7 @@ type Config struct {
 	// OBO-политика (ValidateOBO)
 	Audience       string                           // этот сервис, напр. "wallet" (обязателен)
 	Actor          string                           // кто обменял токен, напр. "api-gateway" (желателен)
-	AllowedAZP     []string                         // допустимые источники клиента (azp), опционально
+	AllowedAZP     []string                         // допустимые источники клиента (azp), опционально (если задано — azp обязателен)
 	Leeway         time.Duration                    // 30–60s
 	MaxTTL         time.Duration                    // <= 5m
 	RequireScopes  bool                             // требовать непустые scopes
@@ -94,12 +94,9 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 			}
 		}
 
-		// subject гарантированно UUID (ValidateOBO это проверил),
-		// но парсим один раз для Identity
 		uid, _ := uuid.Parse(cl.Subject)
 		sc := cl.EffectiveScopes()
 
-		// Доп. политика на уровне метода (All/Any/RequiredScopes)
 		var p Policy
 		if cfg.ResolvePolicy != nil {
 			p = cfg.ResolvePolicy(info.FullMethod)
@@ -215,7 +212,7 @@ func bearerFromMD(ctx context.Context) (string, error) {
 	return parts[1], nil
 }
 
-// Пример извлечения x5t#S256 из peer TLS (для передачи в cfg.MTLSThumbprint)
+// mtlsThumbFromPeer — извлечь x5t#S256 из peer TLS.
 func mtlsThumbFromPeer(ctx context.Context) string {
 	pr, ok := peer.FromContext(ctx)
 	if !ok {
@@ -244,6 +241,10 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.MTLSThumbprint == nil {
 		cfg.MTLSThumbprint = mtlsThumbFromPeer
+	}
+	// Fail-safe: требуем PoP по умолчанию
+	if !cfg.RequirePoP {
+		cfg.RequirePoP = true
 	}
 	return cfg
 }

@@ -104,7 +104,7 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if hdr.Kid == "" {
 		return nil, errors.New("jwt: no kid")
 	}
-	// Только RS256 (RSA-PKCS1 v1.5 с SHA-256)
+	// Только RS256
 	if hdr.Alg != "RS256" {
 		return nil, errors.New("jwt: unexpected alg")
 	}
@@ -194,7 +194,6 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 	case http.StatusOK:
 		// ok
 	case http.StatusNotModified:
-		// только обновим nextRefresh по Cache-Control
 		v.mu.Lock()
 		v.nextRefresh = time.Now().Add(v.refreshIntervalFromHeaders(resp.Header))
 		v.mu.Unlock()
@@ -252,25 +251,19 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 }
 
 func (v *jwksVerifier) refreshIntervalFromHeaders(h http.Header) time.Duration {
-	// По умолчанию
 	re := v.cfg.RefreshEvery
 	if re <= 0 {
 		re = 5 * time.Minute
 	}
-
-	// Попробуем Cache-Control: max-age=N
 	if cc := h.Get("Cache-Control"); cc != "" {
-		if d, ok := parseMaxAge(cc); ok && d > 0 {
-			if re <= 0 || d < re {
-				re = d
-			}
+		if d, ok := parseMaxAge(cc); ok && d > 0 && (re <= 0 || d < re) {
+			re = d
 		}
 	}
 	return re
 }
 
 func parseMaxAge(cc string) (time.Duration, bool) {
-	// Простейший парсер max-age=NNN
 	for _, part := range strings.Split(cc, ",") {
 		part = strings.TrimSpace(strings.ToLower(part))
 		if strings.HasPrefix(part, "max-age=") {
@@ -284,6 +277,7 @@ func parseMaxAge(cc string) (time.Duration, bool) {
 }
 
 // decodeClaims — БЕЗ legacy "scope": принимает только "scopes" как массив строк.
+// Добавлена дедупликация scopes.
 func decodeClaims(payload []byte) (*Claims, error) {
 	type wire struct {
 		Issuer   string   `json:"iss"`
@@ -293,7 +287,7 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Exp      int64    `json:"exp"`
 		Sid      string   `json:"sid,omitempty"`
 		Jti      string   `json:"jti,omitempty"`
-		Scopes   any      `json:"scopes,omitempty"` // ожидаем массив
+		Scopes   any      `json:"scopes,omitempty"`
 		Azp      string   `json:"azp,omitempty"`
 		ACR      string   `json:"acr,omitempty"`
 		AMR      []string `json:"amr,omitempty"`
@@ -315,7 +309,6 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Exp:      w.Exp,
 		Sid:      w.Sid,
 		Jti:      w.Jti,
-		Scopes:   nil, // ниже распарсим
 		Azp:      w.Azp,
 		ACR:      w.ACR,
 		AMR:      w.AMR,
@@ -341,22 +334,31 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		cl.Audience = append(cl.Audience, v...)
 	}
 
-	// Только массив scopes (строгий режим).
+	// Дедупликация scopes
+	appendUnique := func(s string, seen map[string]struct{}) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		cl.Scopes = append(cl.Scopes, s)
+		seen[s] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+
 	switch v := w.Scopes.(type) {
 	case nil:
-		// ок: пусто/не задано — финальное требование решает ValidateOBO (RequireScopes)
+		// ок
 	case []string:
 		for _, s := range v {
-			if s = strings.TrimSpace(s); s != "" {
-				cl.Scopes = append(cl.Scopes, s)
-			}
+			appendUnique(s, seen)
 		}
 	case []any:
 		for _, it := range v {
 			if s, ok := it.(string); ok {
-				if s = strings.TrimSpace(s); s != "" {
-					cl.Scopes = append(cl.Scopes, s)
-				}
+				appendUnique(s, seen)
 			}
 		}
 	default:
@@ -366,7 +368,6 @@ func decodeClaims(payload []byte) (*Claims, error) {
 	return cl, nil
 }
 
-// verifyRS256 — проверка подписи RSA-SHA256 (PKCS#1 v1.5).
 func verifyRS256(pub *rsa.PublicKey, payload, sig []byte) error {
 	h := sha256.Sum256(payload)
 	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, h[:], sig)

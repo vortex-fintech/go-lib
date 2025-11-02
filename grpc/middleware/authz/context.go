@@ -3,12 +3,11 @@ package authz
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	errs "github.com/vortex-fintech/go-lib/errors"
 	libjwt "github.com/vortex-fintech/go-lib/security/jwt"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // тип для ключей контекста (не экспортируем, чтобы избежать коллизий)
@@ -17,6 +16,12 @@ type ctxKey string
 const (
 	keyIdentity ctxKey = "authz.identity"
 	keyClaims   ctxKey = "authz.jwt.claims"
+)
+
+// Sentinel-ошибки для кошелькового контекста (без привязки к gRPC/HTTP)
+var (
+	ErrWalletCtxMissing = errors.New("authz: missing wallet context")
+	ErrWalletMismatch   = errors.New("authz: wallet mismatch")
 )
 
 // Identity — то, что прокидываем в бизнес-логику
@@ -45,7 +50,7 @@ func IdentityFrom(ctx context.Context) (Identity, bool) {
 	return id, ok
 }
 
-// RequireIdentity — достаёт Identity из контекста или вернёт стандартизированную ошибку.
+// RequireIdentity — достаёт Identity из контекста или вернёт стандартизированную доменную ошибку.
 func RequireIdentity(ctx context.Context) (Identity, error) {
 	id, ok := IdentityFrom(ctx)
 	if !ok || id.UserID == uuid.Nil {
@@ -84,14 +89,10 @@ func ClaimsFrom(ctx context.Context) (*libjwt.Claims, bool) {
 }
 
 // RequireWalletID — достаёт wallet_id из положенных в контекст OBO-claims.
-// Возвращает PermissionDenied, если контекст пустой или wallet_id отсутствует.
 func RequireWalletID(ctx context.Context) (string, error) {
 	cl, ok := ClaimsFrom(ctx)
-	if !ok || cl == nil {
-		return "", status.Error(codes.PermissionDenied, "missing wallet context")
-	}
-	if cl.WalletID == "" {
-		return "", status.Error(codes.PermissionDenied, "missing wallet_id")
+	if !ok || cl == nil || cl.WalletID == "" {
+		return "", ErrWalletCtxMissing
 	}
 	return cl.WalletID, nil
 }
@@ -107,7 +108,7 @@ func RequireWalletMatch(ctx context.Context, want string) error {
 		return err
 	}
 	if got != want {
-		return status.Error(codes.PermissionDenied, "wallet mismatch")
+		return ErrWalletMismatch
 	}
 	return nil
 }

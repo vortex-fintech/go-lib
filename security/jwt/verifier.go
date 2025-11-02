@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Сентинел-ошибки (их удобно матчить в вызывающем коде).
+// Sentinel errors (удобно матчить в вызывающем коде).
 var (
 	ErrBadSubject          = errors.New("jwt: bad subject")
 	ErrAudMismatch         = errors.New("jwt: aud mismatch")
@@ -28,16 +28,12 @@ var (
 	ErrAZPMismatch         = errors.New("jwt: azp mismatch")
 )
 
-//
-// Модель OBO-токена (без nbf, с коротким TTL, scopes-только-массив).
-//
-
 // Actor (RFC 8693) — кто обменял токен (обычно клиент-сервис, напр. "api-gateway").
 type Actor struct {
 	Sub string `json:"sub"`
 }
 
-// PoP-binding (RFC 7800) — привязка к клиентскому сертификату.
+// Cnf (RFC 7800) — привязка к клиентскому сертификату (PoP).
 type Cnf struct {
 	X5tS256 string `json:"x5t#S256,omitempty"`
 }
@@ -68,13 +64,13 @@ type Claims struct {
 	AMR []string `json:"amr,omitempty"`
 
 	// Контекст запроса
-	WalletID string `json:"wallet_id,omitempty"` // конкретный кошелёк
+	WalletID string `json:"wallet_id,omitempty"`
 	DeviceID string `json:"device_id,omitempty"`
 }
 
 func (c Claims) ExpiresAt() time.Time { return time.Unix(c.Exp, 0) }
 
-// EffectiveScopes возвращает отсортированную копию scopes.
+// EffectiveScopes — отсортированная копия scopes.
 func (c Claims) EffectiveScopes() []string {
 	if len(c.Scopes) == 0 {
 		return nil
@@ -85,7 +81,7 @@ func (c Claims) EffectiveScopes() []string {
 	return out
 }
 
-// HasScopes — проверка, что required ⊆ Scopes.
+// HasScopes — required ⊆ Scopes.
 func (c Claims) HasScopes(required ...string) bool {
 	if len(required) == 0 {
 		return true
@@ -102,10 +98,7 @@ func (c Claims) HasScopes(required ...string) bool {
 	return true
 }
 
-//
-// Контракты верификатора подписи/базовых временных полей.
-//
-
+// Verifier — контракт верификации подписи/базовых временных полей.
 type Verifier interface {
 	Verify(ctx context.Context, rawToken string) (*Claims, error)
 }
@@ -117,42 +110,21 @@ func DefaultAudienceChecker(cl *Claims, want string) bool {
 	return slices.Contains(cl.Audience, want)
 }
 
-//
-// Валидация OBO-политики для downstream-сервисов.
-//
-
+// OBOValidateOptions — усиленная проверка OBO-токена.
 type OBOValidateOptions struct {
-	// Требуемая аудитория (обычно — текущий сервис). Обязательна.
-	WantAudience string
+	WantAudience string   // обязательна
+	WantActor    string   // если задан — act.sub должен совпасть
+	WantWalletID string   // (опц.) cl.WalletID должен совпасть
+	AllowedAZP   []string // (опц.) белый список azp (если список задан — azp обязателен)
 
-	// Ожидаемый актёр (например, "api-gateway").
-	// Пусто — значение не сопоставляем, но сам факт наличия act.sub обязателен.
-	WantActor string
-
-	// (Опц.) Требуемый кошелёк — проверяем cl.WalletID == WantWalletID.
-	WantWalletID string
-
-	// (Опц.) Ограничить источник клиента (azp), например ["vortex-web","vortex-mobile"].
-	AllowedAZP []string
-
-	// Допуск по времени (компенсация дрейфа часов, напр. 30–60s).
-	Leeway time.Duration
-
-	// Максимальный TTL токена (напр. ≤ 5 минут).
-	MaxTTL time.Duration
-
-	// Проверка PoP: ожидаемый x5t#S256 клиентского сертификата (base64url).
-	// Если непустой — PoP обязателен.
-	MTLSThumbprint string
-
-	// Anti-replay: callback должен вернуть true, если такой jti уже встречался.
-	SeenJTI func(string) bool
-
-	// Требовать, чтобы scopes были непустыми.
-	RequireScopes bool
+	Leeway         time.Duration
+	MaxTTL         time.Duration
+	MTLSThumbprint string // если непустой — PoP обязателен
+	SeenJTI        func(string) bool
+	RequireScopes  bool
 }
 
-// ValidateOBO — усиленная проверка OBO-токена.
+// ValidateOBO — строгая валидация OBO.
 func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 	// 0) sub = UUID
 	if _, err := uuid.Parse(cl.Subject); err != nil {
@@ -172,9 +144,11 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 		return ErrActorMismatch
 	}
 
-	// 2.1) (опц.) azp
-	if len(opt.AllowedAZP) > 0 && cl.Azp != "" && !slices.Contains(opt.AllowedAZP, cl.Azp) {
-		return ErrAZPMismatch
+	// 2.1) (строгий) azp: если включён белый список — azp обязателен и должен быть в списке
+	if len(opt.AllowedAZP) > 0 {
+		if strings.TrimSpace(cl.Azp) == "" || !slices.Contains(opt.AllowedAZP, cl.Azp) {
+			return ErrAZPMismatch
+		}
 	}
 
 	// 3) время жизни: exp/iat + leeway
@@ -223,7 +197,7 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 	return nil
 }
 
-// RequireScopes — обёртка над ValidateOBO для проверки конкретных скоупов эндпоинта.
+// RequireScopes — ValidateOBO + проверка конкретных скоупов.
 func RequireScopes(now time.Time, cl *Claims, opt OBOValidateOptions, required ...string) error {
 	if err := ValidateOBO(now, cl, opt); err != nil {
 		return err
