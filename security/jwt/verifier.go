@@ -1,3 +1,4 @@
+// go-lib/security/jwt/claims.go
 package jwt
 
 import (
@@ -23,6 +24,8 @@ var (
 	ErrReplay              = errors.New("jwt: replay detected")
 	ErrMTLSBindingMismatch = errors.New("jwt: mtls binding mismatch")
 	ErrMissingScopes       = errors.New("jwt: missing scopes")
+	ErrWalletMismatch      = errors.New("jwt: wallet mismatch")
+	ErrAZPMismatch         = errors.New("jwt: azp mismatch")
 )
 
 //
@@ -55,17 +58,17 @@ type Claims struct {
 	Scopes []string `json:"scopes,omitempty"` // ["wallet:read","payments:create"]
 
 	// Семантика OBO
-	Azp string `json:"azp,omitempty"` // кто получил user access от SSO (напр. "frontend-web")
-	Act *Actor `json:"act,omitempty"` // кто обменял токен (напр. "api-gateway")
-
-	// Proof-of-Possession (mTLS)
-	Cnf   *Cnf   `json:"cnf,omitempty"`    // mTLS PoP
-	SrcTH string `json:"src_th,omitempty"` // b64url(sha256 исходного access), опционально
+	Azp   string `json:"azp,omitempty"` // кто получил user access от SSO (напр. "vortex-web")
+	Act   *Actor `json:"act,omitempty"` // кто обменял токен (напр. "api-gateway")
+	Cnf   *Cnf   `json:"cnf,omitempty"` // mTLS PoP
+	SrcTH string `json:"src_th,omitempty"`
 
 	// Контекст аутентификации
 	ACR string   `json:"acr,omitempty"`
 	AMR []string `json:"amr,omitempty"`
 
+	// Контекст запроса
+	WalletID string `json:"wallet_id,omitempty"` // конкретный кошелёк
 	DeviceID string `json:"device_id,omitempty"`
 }
 
@@ -80,6 +83,23 @@ func (c Claims) EffectiveScopes() []string {
 	copy(out, c.Scopes)
 	slices.Sort(out)
 	return out
+}
+
+// HasScopes — проверка, что required ⊆ Scopes.
+func (c Claims) HasScopes(required ...string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	set := make(map[string]struct{}, len(c.Scopes))
+	for _, s := range c.Scopes {
+		set[s] = struct{}{}
+	}
+	for _, r := range required {
+		if _, ok := set[r]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 //
@@ -108,6 +128,12 @@ type OBOValidateOptions struct {
 	// Ожидаемый актёр (например, "api-gateway").
 	// Пусто — значение не сопоставляем, но сам факт наличия act.sub обязателен.
 	WantActor string
+
+	// (Опц.) Требуемый кошелёк — проверяем cl.WalletID == WantWalletID.
+	WantWalletID string
+
+	// (Опц.) Ограничить источник клиента (azp), например ["vortex-web","vortex-mobile"].
+	AllowedAZP []string
 
 	// Допуск по времени (компенсация дрейфа часов, напр. 30–60s).
 	Leeway time.Duration
@@ -144,6 +170,11 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 	}
 	if opt.WantActor != "" && cl.Act.Sub != opt.WantActor {
 		return ErrActorMismatch
+	}
+
+	// 2.1) (опц.) azp
+	if len(opt.AllowedAZP) > 0 && cl.Azp != "" && !slices.Contains(opt.AllowedAZP, cl.Azp) {
+		return ErrAZPMismatch
 	}
 
 	// 3) время жизни: exp/iat + leeway
@@ -184,5 +215,27 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 		return ErrMissingScopes
 	}
 
+	// 7) (опц.) требуемый кошелёк
+	if opt.WantWalletID != "" && cl.WalletID != opt.WantWalletID {
+		return ErrWalletMismatch
+	}
+
 	return nil
+}
+
+// RequireScopes — обёртка над ValidateOBO для проверки конкретных скоупов эндпоинта.
+func RequireScopes(now time.Time, cl *Claims, opt OBOValidateOptions, required ...string) error {
+	if err := ValidateOBO(now, cl, opt); err != nil {
+		return err
+	}
+	if len(required) > 0 && !cl.HasScopes(required...) {
+		return ErrMissingScopes
+	}
+	return nil
+}
+
+// RequireWallet — ValidateOBO + проверка wallet_id + скоупов.
+func RequireWallet(now time.Time, cl *Claims, opt OBOValidateOptions, walletID string, required ...string) error {
+	opt.WantWalletID = walletID
+	return RequireScopes(now, cl, opt, required...)
 }

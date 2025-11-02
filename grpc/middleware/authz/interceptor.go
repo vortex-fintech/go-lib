@@ -1,3 +1,4 @@
+// go-lib/authz/interceptor.go
 package authz
 
 import (
@@ -35,6 +36,7 @@ type Config struct {
 	// OBO-политика (ValidateOBO)
 	Audience       string                           // этот сервис, напр. "wallet" (обязателен)
 	Actor          string                           // кто обменял токен, напр. "api-gateway" (желателен)
+	AllowedAZP     []string                         // допустимые источники клиента (azp), опционально
 	Leeway         time.Duration                    // 30–60s
 	MaxTTL         time.Duration                    // <= 5m
 	RequireScopes  bool                             // требовать непустые scopes
@@ -74,10 +76,10 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 			return nil, status.Error(codes.Unauthenticated, "missing mTLS client certificate")
 		}
 
-		// Дальше всё как было — ValidateOBO потребует cnf и сравнит с thumb
 		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
 			WantAudience:   cfg.Audience,
 			WantActor:      cfg.Actor,
+			AllowedAZP:     cfg.AllowedAZP,
 			Leeway:         cfg.Leeway,
 			MaxTTL:         cfg.MaxTTL,
 			MTLSThumbprint: thumb,
@@ -107,7 +109,10 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 		}
 
 		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID}
-		return handler(WithIdentity(ctx, id), req)
+		ctx = WithIdentity(ctx, id)
+		ctx = WithClaims(ctx, cl) // если где-то нужно читать wallet_id/azp/acr
+
+		return handler(ctx, req)
 	}
 }
 
@@ -139,6 +144,7 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
 			WantAudience:   cfg.Audience,
 			WantActor:      cfg.Actor,
+			AllowedAZP:     cfg.AllowedAZP,
 			Leeway:         cfg.Leeway,
 			MaxTTL:         cfg.MaxTTL,
 			MTLSThumbprint: thumb,
@@ -164,8 +170,8 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 			return status.Error(codes.PermissionDenied, "insufficient scope")
 		}
 
-		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid}
-		wrapped := &serverStream{ServerStream: ss, ctx: WithIdentity(ctx, id)}
+		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID}
+		wrapped := &serverStream{ServerStream: ss, ctx: WithClaims(WithIdentity(ctx, id), cl)}
 		return handler(srv, wrapped)
 	}
 }
@@ -224,6 +230,9 @@ func mtlsThumbFromPeer(ctx context.Context) string {
 }
 
 func normalize(cfg Config) Config {
+	if cfg.Verifier == nil {
+		panic("authz: Verifier must be set")
+	}
 	if cfg.Audience == "" {
 		panic("authz: Audience must be set")
 	}
@@ -235,10 +244,6 @@ func normalize(cfg Config) Config {
 	}
 	if cfg.MTLSThumbprint == nil {
 		cfg.MTLSThumbprint = mtlsThumbFromPeer
-	}
-	// Требуем PoP по умолчанию
-	if !cfg.RequirePoP {
-		cfg.RequirePoP = true
 	}
 	return cfg
 }

@@ -1,5 +1,4 @@
-// package jwt
-
+// go-lib/security/jwt/verifier_jwks.go
 package jwt
 
 import (
@@ -21,12 +20,12 @@ import (
 )
 
 // JWKS-клиент с in-memory кэшем + поддержкой Cache-Control/ETag.
-
 type JWKSConfig struct {
 	URL            string        // https://sso.internal/.well-known/jwks.json
 	RefreshEvery   time.Duration // верхняя граница, если нет/большой max-age
 	Timeout        time.Duration // HTTP timeout для JWKS-запроса
 	ExpectedIssuer string        // опциональная проверка iss
+	Leeway         time.Duration // опциональный leeway для iat/exp (если 0 => 5s)
 }
 
 type jwk struct {
@@ -136,7 +135,10 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	}
 
 	// Time checks (leeway)
-	const leeway = 5 * time.Second
+	leeway := v.cfg.Leeway
+	if leeway <= 0 {
+		leeway = 5 * time.Second
+	}
 	now := time.Now()
 	if now.Add(-leeway).After(cl.ExpiresAt()) {
 		return nil, errors.New("jwt: expired")
@@ -299,6 +301,7 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Cnf      *Cnf     `json:"cnf,omitempty"`
 		SrcTH    string   `json:"src_th,omitempty"`
 		DeviceID string   `json:"device_id,omitempty"`
+		WalletID string   `json:"wallet_id,omitempty"`
 	}
 	var w wire
 	if err := json.Unmarshal(payload, &w); err != nil {
@@ -312,6 +315,7 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Exp:      w.Exp,
 		Sid:      w.Sid,
 		Jti:      w.Jti,
+		Scopes:   nil, // ниже распарсим
 		Azp:      w.Azp,
 		ACR:      w.ACR,
 		AMR:      w.AMR,
@@ -319,6 +323,7 @@ func decodeClaims(payload []byte) (*Claims, error) {
 		Cnf:      w.Cnf,
 		SrcTH:    w.SrcTH,
 		DeviceID: w.DeviceID,
+		WalletID: w.WalletID,
 	}
 
 	switch v := w.Audience.(type) {

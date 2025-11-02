@@ -1,4 +1,7 @@
+// go-lib/authz/helpers.go
 package authz
+
+import "strings"
 
 // MapResolver — резолвер политик по полному имени метода.
 func MapResolver(m map[string]Policy) PolicyResolver {
@@ -25,4 +28,16 @@ func SliceSkipAuth(methods ...string) SkipAuthFunc {
 		m[s] = struct{}{}
 	}
 	return MapSkipAuth(m)
+}
+
+// PrefixSkipAuth — пропуск аутентификации по префиксам (напр. "/health", "/grpc.health.v1.Health/").
+func PrefixSkipAuth(prefixes ...string) SkipAuthFunc {
+	return func(full string) bool {
+		for _, p := range prefixes {
+			if strings.HasPrefix(full, p) {
+				return true
+			}
+		}
+		return false
+	}
 }
