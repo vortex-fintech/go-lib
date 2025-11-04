@@ -104,8 +104,8 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if hdr.Kid == "" {
 		return nil, errors.New("jwt: no kid")
 	}
-	// Только RS256
-	if hdr.Alg != "RS256" {
+	// Разрешаем RS256 и PS256
+	if hdr.Alg != "RS256" && hdr.Alg != "PS256" {
 		return nil, errors.New("jwt: unexpected alg")
 	}
 
@@ -120,8 +120,15 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyRS256(key, []byte(signed), sig); err != nil {
-		return nil, err
+	switch hdr.Alg {
+	case "RS256":
+		if err := verifyRS256(key, []byte(signed), sig); err != nil {
+			return nil, err
+		}
+	case "PS256":
+		if err := verifyPS256(key, []byte(signed), sig); err != nil {
+			return nil, err
+		}
 	}
 
 	// Payload
@@ -215,7 +222,7 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 		if k.Use != "" && k.Use != "sig" {
 			continue
 		}
-		if k.Alg != "" && k.Alg != "RS256" {
+		if k.Alg != "" && k.Alg != "RS256" && k.Alg != "PS256" {
 			continue
 		}
 		if k.Kid == "" || k.N == "" || k.E == "" {
@@ -371,6 +378,13 @@ func decodeClaims(payload []byte) (*Claims, error) {
 func verifyRS256(pub *rsa.PublicKey, payload, sig []byte) error {
 	h := sha256.Sum256(payload)
 	return rsa.VerifyPKCS1v15(pub, crypto.SHA256, h[:], sig)
+}
+
+func verifyPS256(pub *rsa.PublicKey, payload, sig []byte) error {
+	h := sha256.Sum256(payload)
+	// Рекомендованный режим для JWT PS256: salt = len(hash)
+	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
+	return rsa.VerifyPSS(pub, crypto.SHA256, h[:], sig, opts)
 }
 
 // X5tS256FromCert — x5t#S256 (base64url без паддинга) из DER-серта.
