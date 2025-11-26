@@ -1,279 +1,207 @@
 # go-lib
 
-Пакет с переиспользуемыми утилитами и инфраструктурными компонентами для Go‑сервисов Vortex.
+Набор battle-tested библиотек, утилит и инфраструктурных компонентов, которые используются во всех Go‑сервисах Vortex. Здесь собраны решения для ошибок, сетевой безопасности, транспорта gRPC/HTTP, хранилищ данных, метрик, graceful shutdown и инструментов разработчика. Репозиторий можно подключать целиком или выборочно, импортируя только нужные пакеты.
 
-Фокус: строгая обработка ошибок (HTTP/gRPC), надёжная остановка сервисов, метрики, gRPC‑middleware, Postgres/Redis клиенты, JWT/JWKS верификация и mTLS.
+## Содержание
 
-## Быстрый старт
+- [go-lib](#go-lib)
+  - [Содержание](#содержание)
+  - [Назначение](#назначение)
+  - [Основные возможности](#основные-возможности)
+  - [Структура репозитория](#структура-репозитория)
+  - [Требования и установка](#требования-и-установка)
+  - [Быстрый старт](#быстрый-старт)
+  - [Ключевые пакеты](#ключевые-пакеты)
+    - [errors](#errors)
+    - [grpc/middleware](#grpcmiddleware)
+    - [security](#security)
+    - [data layer](#data-layer)
+    - [сервисная инфраструктура](#сервисная-инфраструктура)
+    - [вспомогательные пакеты](#вспомогательные-пакеты)
+  - [Наблюдаемость и эксплуатация](#наблюдаемость-и-эксплуатация)
+  - [Тестирование и качество](#тестирование-и-качество)
+    - [Быстрые проверки (PowerShell)](#быстрые-проверки-powershell)
+    - [Makefile цели (Bash)](#makefile-цели-bash)
+    - [Интеграционные тесты вручную](#интеграционные-тесты-вручную)
+    - [Проверки перед релизом](#проверки-перед-релизом)
+  - [Интеграция в CI/CD](#интеграция-в-cicd)
+  - [Версионирование и совместимость](#версионирование-и-совместимость)
+  - [Вклад и поддержка](#вклад-и-поддержка)
+  - [Лицензия](#лицензия)
 
-- Требования: Go 1.25+ (toolchain go1.25.x)
-- Установка:
+## Назначение
+
+`go-lib` стандартизирует инфраструктурные слои, чтобы боевые сервисы могли сосредоточиться на бизнес‑логике и при этом соответствовали внутренним требованиям по безопасности, наблюдаемости и отказоустойчивости. Каждый пакет сопровождается тестами и может использоваться в продакшене без доработок.
+
+## Основные возможности
+
+- единый формат ошибок с адаптерами под HTTP/gRPC и EM-friendly полями;
+- middleware-цепочки для gRPC (authz, circuit breaker, context cancel, metrics, error mapping);
+- клиенты Postgres (pgxpool) и Redis с безопасной конфигурацией и helper’ами для транзакций;
+- библиотека для JWT/JWKS, PoP (mTLS) и OBO‑политик, а также утилиты для HMAC‑одноразовых паролей;
+- TLS helpers (сервер/клиент, динамическая перезагрузка, проверка цепочек) и анти‑replay механизмы;
+- metrics handler с `/metrics` и `/health`, совместимый с Prometheus и Kubernetes probes;
+- retry/time/net/hash/validator/logging утилиты, используемые всеми сервисами;
+- инструменты graceful shutdown/metrics, покрывающие запуск, ожидание и мягкую остановку нескольких серверов.
+
+## Структура репозитория
+
+| Директория | Назначение |
+| --- | --- |
+| `authz/scope` | Проверка скоупов и политики доступа на уровне бизнес‑операций. |
+| `db/postgres` | Подключение к Postgres (pgxpool), runners, транзакции, тестовые хуки, Docker‑компоуз для интеграций. |
+| `db/redis` | Клиент Redis с поддержкой TLS, Sentinel, Cluster и проверкой доступности. |
+| `errors` | Конструкторы доменных ошибок, gRPC/HTTP адаптеры, пресеты и валидационные адаптеры. |
+| `graceful` | Метрики graceful-цикла, менеджер остановки (`graceful/shutdown`) и адаптеры для HTTP/gRPC. |
+| `grpc` | Набор middleware (authz, chain, circuit breaker, context cancel, errors, metrics), dialer и metadata/helpers. |
+| `hash` | SHA‑256 утилиты и тесты. |
+| `logger` | Обёртка над zap с безопасным синком и профилями окружений. |
+| `logutil` | Санитизация/редакция данных перед логированием. |
+| `metrics` | HTTP‑handler для `/metrics` и `/health` с встроенными стандартными метриками. |
+| `netutil` | Нормализация таймаутов и сетевые helpers. |
+| `retry` | Экспоненциальные и быстрые ретраи, уважающие контекст. |
+| `security/hmacotp` | Генерация и проверка HMAC‑одноразовых кодов (e.g. device binding). |
+| `security/jwt` | JWKS‑верификатор, строгая OBO‑валидация, PoP-утилиты. |
+| `security/mtls` | mTLS конфигурации, загрузка сертификатов, hot reload, helpers для тестов. |
+| `security/replay` | Защита от повторного воспроизведения запросов. |
+| `security/tlsutil` | Расчёт `x5t` и связанные TLS‑утилиты. |
+| `timeutil` | UTC‑clock, sleep с отменой и helpers для тестирования времени. |
+| `validator` | Надстройка над `go-playground/validator` с маппингом тэгов в коды ошибок. |
+
+В корне также находятся `Makefile` для унификации тестов/линтеров, `LICENSE` (MIT) и `go.mod` c Go 1.25 toolchain.
+
+## Требования и установка
+
+- Go 1.25+ (используем toolchain `go1.25.1`).
+- Docker + Docker Compose (для интеграционных тестов Postgres).
+- Git Bash/WSL или иная Bash‑совместимая оболочка для команд `make`.
+
+Установка:
 
 ```bash
 go get github.com/vortex-fintech/go-lib@latest
 ```
 
-- Импортируйте нужные пакеты, примеры ниже.
+После установки импортируйте только нужные подпакеты — модуль разбит на независимые части и не тянет лишние зависимости.
 
-## Состав пакетов и примеры
-
-Ниже только самое полезное для продакшена. В коде много тестов — их можно посмотреть как дополнительную документацию.
-
-### errors — единый формат ошибок для HTTP и gRPC
-
-Структура ErrorResponse со следующими возможностями:
-- код gRPC (`codes.Code`) + человекочитаемое сообщение
-- машинный `Reason`, `Domain`, `Details` (k/v)
-- валидационные нарушения (BadRequest Violations)
-- конвертация в gRPC status и HTTP ответ
-
-Пример:
+## Быстрый старт
 
 ```go
-import (
-    gliberr "github.com/vortex-fintech/go-lib/errors"
-    "google.golang.org/grpc/codes"
-)
+package main
 
-func CreateUser() error {
-    // Валидация
-    return gliberr.InvalidArgument().
-        WithReason("invalid_input").
-        WithDetails(map[string]string{"email":"invalid"}).
-        WithViolations([]gliberr.FieldViolation{{Field:"email", Reason:"invalid"}})
-}
-
-func ToGRPC(err error) error {
-    return gliberr.Internal().WithReason("unexpected").ToGRPC()
-}
-
-func ToHTTP(w http.ResponseWriter) {
-    gliberr.ResourceExhausted().
-        WithDetail("retry","10s").
-        ToHTTPWithRetry(w, 10*time.Second)
-}
-```
-
-См. также адаптеры для gRPC: `grpc/middleware/errorsmw` ниже.
-
-### grpc/middleware — цепочки и полезные перехватчики
-
-- chain: сборка единой цепочки unary‑перехватчиков с правильным порядком
-- errorsmw: перевод ошибок домена/контекста в статус gRPC
-- metricsmw (+ promreporter): наблюдаемость RPC
-- contextcancel: корректное завершение при отмене контекста
-- circuitbreaker: простой CB c HALF_OPEN пробами
-- authz: аутентификация/авторизация по OBO‑JWT с PoP (mTLS)
-
-Сборка сервера с цепочкой:
-
-```go
-import (
-    "google.golang.org/grpc"
-    chain "github.com/vortex-fintech/go-lib/grpc/middleware/chain"
-    errorsmw "github.com/vortex-fintech/go-lib/grpc/middleware/errorsmw"
-    metricsmw "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw"
-    promrep "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw/promreporter"
-)
-
-// Ваши пром‑метрики
-type myRPCMetrics struct { /* ... */ }
-func (m *myRPCMetrics) ObserveRPC(svc, method, code string, sec float64) {}
-func (m *myRPCMetrics) IncError(typ, svc, method string) {}
-
-rep := promrep.Reporter{M: &myRPCMetrics{}}
-
-srv := grpc.NewServer(chain.Default(chain.Options{
-    Pre:  []grpc.UnaryServerInterceptor{metricsmw.UnaryFull(rep)},
-    Post: []grpc.UnaryServerInterceptor{},
-    // AuthzInterceptor: см. ниже
-}))
-```
-
-#### authz — OBO‑JWT + PoP (mTLS) + scopes
-
-Перехватчик проверяет:
-- подпись JWT через ваш `Verifier` (например, JWKS)
-- политику OBO (`aud`, `act.sub`, `exp/iat` + `leeway`, `max TTL`)
-- обязательную привязку к клиентскому сертификату (PoP, `x5t#S256`) — по умолчанию включено
-- наличие/достаточность скоупов (All/Any/глобальные)
-
-В контекст прокидывается `Identity{UserID uuid.UUID, Scopes []string, SID, DeviceID}`.
-
-Пример настройки с JWKS‑верификатором:
-
-```go
-import (
-    "github.com/vortex-fintech/go-lib/grpc/middleware/authz"
-    libjwt "github.com/vortex-fintech/go-lib/security/jwt"
-)
-
-verifier, _ := libjwt.NewJWKSVerifier(libjwt.JWKSConfig{
-    URL:            "https://sso.internal/.well-known/jwks.json",
-    RefreshEvery:   5 * time.Minute,
-    Timeout:        5 * time.Second,
-    ExpectedIssuer: "https://sso.internal",
-})
-
-az := authz.UnaryServerInterceptor(authz.Config{
-    Verifier:       verifier,
-    Audience:       "wallet",       // этот сервис
-    Actor:          "api-gateway",  // ожидаемый актёр
-    Leeway:         45 * time.Second,
-    MaxTTL:         5 * time.Minute,
-    RequireScopes:  true,
-    RequirePoP:     true, // по умолчанию true
-    ResolvePolicy:  authz.MapResolver(map[string]authz.Policy{"/pkg.Service/Method":{All:[]string{"wallet:read"}}}),
-    SkipAuth:       authz.SliceSkipAuth("/pkg.Health/Check"),
-})
-
-srv := grpc.NewServer(chain.Default(chain.Options{AuthzInterceptor: az}))
-```
-
-Доступ к идентичности в бизнес‑коде:
-
-```go
-id, err := authz.RequireIdentity(ctx) // или только UUID: authz.RequireUserID(ctx)
-```
-
-### security/jwt — JWKS‑верификация и строгая политика OBO
-
-- `NewJWKSVerifier(JWKSConfig)` — безопасный клиент JWKS с кэшированием, поддержкой Cache‑Control/ETag
-- `ValidateOBO(now, claims, OBOValidateOptions)` — строгие проверки aud/act/времени/JTI/PoP/scopes
-- Утилиты: `X5tS256FromCert` для mTLS привязки
-
-### security/mtls — TLS для клиента и сервера, живой перезагрузчик
-
-См. пакет `security/mtls`: генерация `*tls.Config` для сервера/клиента, загрузка из файлов, перезагрузка при изменении.
-
-### graceful/shutdown — единый менеджер остановки
-
-- оркеструет запуск и остановку многих серверов
-- различает «нормальные» ошибки serve (например, http.ErrServerClosed)
-- ограничение по времени с форс‑остановкой
-- сигналы ОС (SIGINT/SIGTERM), интеграция логирования, метрики Prometheus
-
-Пример см. выше (блок Quickstart).
-
-### db/postgres — pgxpool + удобные раннеры и транзакции
-
-Высокоуровневое открытие по URL и низкоуровневое по структуре конфигурации.
-
-```go
 import (
     "context"
     "time"
+
+    gliberr "github.com/vortex-fintech/go-lib/errors"
     "github.com/vortex-fintech/go-lib/db/postgres"
+    metricsmw "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw"
+    promrep "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw/promreporter"
+    chain "github.com/vortex-fintech/go-lib/grpc/middleware/chain"
+    "google.golang.org/grpc"
 )
 
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
 
-// Через DBConfig (host/port/...)
-cli, err := postgres.OpenWithDBConfig(ctx, postgres.DBConfig{
-    Host:"localhost", Port:"5433", User:"testuser", Password:"testpass",
-    DBName:"testdb", SSLMode:"disable",
-    MaxOpenConns:10, MaxIdleConns:5,
-    ConnMaxLifetime:10 * time.Minute, ConnMaxIdleTime:2 * time.Minute,
-})
-if err != nil { /* ... */ }
-defer cli.Close()
+    db, err := postgres.Open(ctx, "postgres://user:pass@localhost:5432/app?sslmode=disable")
+    if err != nil {
+        panic(gliberr.Internal().WithReason("db_unavailable"))
+    }
+    defer db.Close()
 
-// Выполнение запросов
-run := cli.RunnerFromPool()
-row := run.QueryRow(ctx, "SELECT 1")
+    rep := promrep.NewDefault()
+    srv := grpc.NewServer(chain.Default(chain.Options{
+        Pre: []grpc.UnaryServerInterceptor{metricsmw.UnaryFull(rep)},
+    }))
 
-// Транзакция
-_ = cli.WithTx(ctx, func(txrun postgres.Runner) error {
-    _, err := txrun.Exec(ctx, "INSERT ...")
-    return err
-})
+    _ = srv // регистрируйте сервисы, используйте db.Runner() для работы с БД
+}
 ```
 
-Обработчики ошибок Postgres: `Constraint(err)`, `IsUniqueViolation(err)` и др.
+Код выше демонстрирует типичный каркас: готовые ошибки, безопасный Postgres‑клиент и gRPC‑сервер с метриками. Остальные подсистемы (authz, logger, graceful shutdown) подключаются аналогичным образом.
 
-### db/redis — универсальный клиент (single/sentinel/cluster)
+## Ключевые пакеты
+
+### errors
+
+- конструкторы `Internal()`, `InvalidArgument()`, `Unauthenticated()` и др. возвращают неизменяемые шаблоны;
+- методы `WithReason`, `WithDomain`, `WithDetails`, `WithViolations` формируют payload для клиентов;
+- адаптеры `ToGRPC`, `ToHTTP`, `FromStatus` обеспечивают симметрию между протоколами;
+- предусмотрены пресеты и адаптеры валидации (`validation_adapters.go`).
 
 ```go
-rdb, err := redis.NewRedisClient(ctx, redis.Config{Addr: "127.0.0.1:6379", TLSEnabled: false})
-if err != nil { /* ... */ }
-defer rdb.Close()
+func CreateUser() error {
+    return gliberr.InvalidArgument().
+        WithReason("invalid_email").
+        WithViolations([]gliberr.FieldViolation{{Field: "email", Reason: "invalid"}})
+}
 ```
 
-Поддержка TLS (минимум TLS 1.2), пинг при инициализации с таймаутом.
+### grpc/middleware
 
-### metrics — /metrics и /health в одном handler’е
+- `chain`: правильная сборка pre/post цепочек и authz‑интерсептора;
+- `authz`: проверка OBO‑JWT, PoP (мэппинг `x5t#S256` с TLS), скоупы и identity helpers;
+- `circuitbreaker`: half-open стратегия, лимиты попыток и метрики ошибок;
+- `contextcancel`: гарантирует отмену RPC при потере клиента;
+- `errorsmw`: конвертирует доменные ошибки в gRPC status/k8s-friendly сообщения;
+- `metricsmw` + `promreporter`: готовые счетчики/гистограммы для Prometheus с минимальными настройками.
 
-```go
-import (
-    "net/http"
-    "github.com/vortex-fintech/go-lib/metrics"
-)
+### security
 
-mux, reg := metrics.New(metrics.Options{
-    Register: func(r prometheus.Registerer) error { /* регистрируем свои метрики */; return nil },
-    Health:   func(ctx context.Context, r *http.Request) error { return nil },
-})
-_ = http.ListenAndServe(":9100", mux)
-```
+- `security/jwt`: JWKS‑клиент с кэшированием, проверкой хедеров (kid, alg), поддержкой ETag/Cache-Control, функциями `ValidateOBO` и PoP (`X5tS256FromCert`).
+- `security/hmacotp`: безопасные одноразовые коды (включая window, TTL, попытки) для device binding и подтверждений операций.
+- `security/mtls`: загрузчик TLS‑материалов, валидация цепочек, клиентские и серверные конфиги, hot reload, `test_helpers.go` для integration tests.
+- `security/replay`: реплей-протекция с хранением отпечатков и TTL.
+- `security/tlsutil`: расчёт `x5t` и вспомогательные функции для PoP и mutual TLS.
 
-- GET/HEAD‑только маршруты, таймаут health по умолчанию 500ms
-- регистрируются стандартные Go/Process метрики
+### data layer
 
-### logger — лёгкая обёртка над zap
+- `db/postgres`: работа через `pgxpool.Pool`, runners (`RunnerFromPool`, `RunnerFromConn`), транзакции `WithTx`, обработка ошибок `IsUniqueViolation`, `Constraint`. В комплекте build-теги `unit`, `integration`, `testhooks` и docker-compose для CI.
+- `db/redis`: создание клиента с пингом и поддержкой TLS 1.2+, Sentinel/Cluster, graceful закрытие.
 
-```go
-log := logger.Init("my-service", "production")
-defer log.SafeSync()
-log.Infow("start", "version", "1.2.3")
-```
+### сервисная инфраструктура
 
-Поддерживаются окружения: development, debug, production, unknown.
+- `graceful/shutdown`: менеджер, который запускает/останавливает несколько серверов, подписывается на SIGINT/SIGTERM, умеет различать «нормальные» ошибки (`http.ErrServerClosed`) и фатальные.
+- `graceful/metrics`: метрики времени остановки/ожидания, репортинг в Prometheus.
+- `metrics`: HTTP‑handler комбинирует `/metrics` и `/health` (GET/HEAD), автоматически регистрирует Go/process метрики и предоставляет простой API для ваших health‑проверок.
+- `logger`: инициализация zap логгера с безопасным `SafeSync` и пресетами профилей (`development`, `debug`, `production`).
+- `retry`, `timeutil`, `netutil`: контролируемые ретраи, mockable часы, санитария таймаутов — используются во всех остальных пакетах.
 
-### retry — быстрые ретраи
+### вспомогательные пакеты
 
-`RetryInit(ctx, fn)` и `RetryFast(ctx, fn)` — экспонента и быстрый режим соответственно, уважают context.
+- `authz/scope`: набор структур для описания политик (All/Any/Gloabl scopes) и функция `checker` для их проверки;
+- `hash`, `logutil`, `validator`, `grpc/metadata`, `grpc/dial`, `grpc/creds` и др. обеспечивают мелкие, но важные куски инфраструктуры.
 
-### validator — обёртка над go‑playground/validator
+## Наблюдаемость и эксплуатация
 
-`Validate(any) map[string]string` и `Instance()` для доступа к оригинальному валидатору. См. `validator/tagmap.go` для маппинга кодов ошибок.
+- `/metrics` и `/health` поднимаются вызовом `metrics.New`, который возвращает mux и Prometheus registerer. Таймаут health по умолчанию 500 мс, маршруты поддерживают только GET/HEAD.
+- gRPC наблюдаемость достигается комбинацией `metricsmw` и `promreporter`. Пакет предоставляет интерфейсы, совместимые с нашими стандартами именования.
+- `graceful/metrics` дополнительно публикует время запуска/остановки серверов и количество активных goroutine.
+- Логирование централизовано через `logger.Init(name, env)` — в production профиле включены JSON-логи, stacktrace только для ошибок, а SafeSync гарантирует flush.
 
-### Прочее
+## Тестирование и качество
 
-- hash: SHA‑256 утилиты
-- timeutil: UTC‑часы, оффсеты, sleep с отменой
-- netutil: санитация таймаутов
-- logutil: маскировка/санитизация ошибок в зависимости от окружения
-- grpc/creds: обёртки для gRPC transport credentials
+Проект разделяет юнит‑, интеграционные и race‑тесты через build‑теги и цели Makefile.
 
-## Тестирование
-
-Проект разделяет юнит‑ и интеграционные тесты через build‑теги.
-
-### Юнит‑тесты
-
-Запуск (Windows PowerShell):
+### Быстрые проверки (PowerShell)
 
 ```powershell
 go test -count=1 -tags=unit ./...
 go test -count=1 -tags "unit testhooks" ./db/postgres
+go vet ./...
 ```
 
-Или через Make (требуется Bash, например Git Bash/WSL):
+### Makefile цели (Bash)
 
-```bash
-make test
-```
+- `make test` — все unit + testhooks для Postgres;
+- `make test-integration` — поднимает Docker с Postgres, запускает `go test -tags=integration ./...`, выключает инфраструктуру;
+- `make test-all` — unit + integration последовательно;
+- `make test-race` — unit и testhooks с включённой `-race`;
+- `make cover` — собирает отчёты покрытия и открывает `coverage.html`.
 
-### Интеграционные тесты (Postgres + Docker)
-
-Требуются: Docker и docker compose. БД поднимается по `db/postgres/docker-compose.test.yml` (порт 5433).
-
-```bash
-make test-integration    # up -> wait -> go test -tags=integration -> down
-```
-
-Эквивалент вручную (PowerShell):
+### Интеграционные тесты вручную
 
 ```powershell
 docker compose -f db/postgres/docker-compose.test.yml up -d --wait --wait-timeout 60
@@ -281,28 +209,33 @@ go test -count=1 -tags integration ./...
 docker compose -f db/postgres/docker-compose.test.yml down -v
 ```
 
-## Совместимость и версии
+### Проверки перед релизом
 
-- Go 1.25+
-- Модуль: `github.com/vortex-fintech/go-lib`
-- Семантические версии (SemVer). Уточняйте совместимость мажорных релизов по changelog (в рамках мажора — обратная совместимость API).
+- `go build ./...`
+- `go vet ./...`
+- `go test -count=1 -tags=unit ./...`
+- `go test -count=1 -tags "unit testhooks" ./db/postgres`
+- `make test-integration` (при изменениях БД или TLS инфраструктуры)
+
+## Интеграция в CI/CD
+
+1. Подключите `go env -w GOTOOLCHAIN=auto` либо используйте локальный toolchain 1.25.1 (см. `go.mod`).
+2. Выполняйте `go test ./...` с нужными тегами в параллельных job’ах (unit/testhooks/integration).
+3. При необходимости запускайте `make up` для развёртывания Postgres перед интеграционными тестами и `make down`, чтобы гарантированно очистить тома.
+4. Публикуйте артефакты покрытий (`coverage.out`, `coverage.dbpgx.out`) для анализа качества.
+
+## Версионирование и совместимость
+
+- Модуль `github.com/vortex-fintech/go-lib` следует SemVer.
+- Мажорные релизы могут вносить ломающие изменения, но внутри одного мажора API стабильны.
+- Минимальная поддерживаемая версия Go — 1.25. Старшие версии также поддерживаются (используется `toolchain go1.25.1`).
+
+## Вклад и поддержка
+
+- Issues и Pull Requests приветствуются; старайтесь прикладывать тесты и описывать сценарии отказа.
+- Перед PR запускайте unit + testhooks + integration (если затронуты БД или TLS пакеты).
+- Security‑вопросы лучше отправлять приватно (см. внутренние инструкции команды безопасности).
 
 ## Лицензия
 
-MIT — см. `LICENSE`.
-
-## Вклад и вопросы
-
-PR/issue приветствуются. Для security‑вопросов используйте приватный канал; не публикуйте чувствительные детали в публичных задачах.
-
-## Диагностика прод‑готовности (состояние репозитория)
-
-- Build: PASS (`go build ./...`)
-- Vet: PASS (`go vet ./...`)
-- Unit tests: PASS (`go test -tags=unit ./...` и `-tags "unit testhooks" ./db/postgres`)
-- Integration tests: требуют Docker; запускаются по `make test-integration` — см. раздел «Тестирование»
-
-Рекомендации по развитию (не блокеры):
-- при необходимости добавить линтеры (golangci-lint) и CI‑workflow
-- описать политику релизов/changelog
-- расширить README примерами по security/mtls при необходимости
+MIT — подробности в `LICENSE`.
