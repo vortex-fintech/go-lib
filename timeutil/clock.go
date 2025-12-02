@@ -10,7 +10,7 @@ import (
 type Clock interface {
 	// Now возвращает текущее время (ожидаем UTC).
 	Now() time.Time
-	// Since — удобный сахар для измерения интервалов.
+	// Since — сахар для измерения интервалов относительно Now().
 	Since(t time.Time) time.Duration
 	// Sleep — "спать" d, с поддержкой отмены через ctx.
 	Sleep(ctx context.Context, d time.Duration) error
@@ -21,8 +21,15 @@ type Clock interface {
 // UTCClock — системные часы в UTC.
 type UTCClock struct{}
 
-func (UTCClock) Now() time.Time                  { return time.Now().UTC() }
-func (UTCClock) Since(t time.Time) time.Duration { return time.Since(t) }
+func (UTCClock) Now() time.Time {
+	return time.Now().UTC()
+}
+
+// Важно: считаем разницу относительно Clock.Now(), а не time.Since.
+func (c UTCClock) Since(t time.Time) time.Duration {
+	return c.Now().Sub(t)
+}
+
 func (UTCClock) Sleep(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		// немедленный возврат (идемпотентно и удобно для тестов)
@@ -33,8 +40,10 @@ func (UTCClock) Sleep(ctx context.Context, d time.Duration) error {
 			return nil
 		}
 	}
+
 	timer := time.NewTimer(d)
 	defer timer.Stop()
+
 	select {
 	case <-timer.C:
 		return nil
@@ -50,40 +59,49 @@ type OffsetClock struct {
 	Offset time.Duration
 }
 
-func (c OffsetClock) Now() time.Time {
-	base := c.Base
-	if base == nil {
-		base = Default
+func (c OffsetClock) base() Clock {
+	if c.Base != nil {
+		return c.Base
 	}
-	return base.Now().Add(c.Offset)
+	return Default
 }
-func (c OffsetClock) Since(t time.Time) time.Duration { return time.Since(t) }
+
+func (c OffsetClock) Now() time.Time {
+	return c.base().Now().Add(c.Offset)
+}
+
+func (c OffsetClock) Since(t time.Time) time.Duration {
+	// считаем разницу относительно "смещённого" Now()
+	return c.Now().Sub(t)
+}
+
 func (c OffsetClock) Sleep(ctx context.Context, d time.Duration) error {
-	base := c.Base
-	if base == nil {
-		base = Default
-	}
-	return base.Sleep(ctx, d)
+	return c.base().Sleep(ctx, d)
 }
 
 // FrozenClock — фиксированное время с возможностью ручного сдвига.
 // Удобно для unit-тестов бизнес-логики.
 type FrozenClock struct {
 	mu sync.RWMutex
-	t  time.Time // ожидаем UTC, но не принуждаем (оставим ответственность вызывающему)
+	t  time.Time // храним в UTC
 }
 
 func NewFrozenClock(t time.Time) *FrozenClock {
-	return &FrozenClock{t: t}
+	return &FrozenClock{t: t.UTC()}
 }
+
 func (c *FrozenClock) Now() time.Time {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.t
 }
-func (c *FrozenClock) Since(t time.Time) time.Duration { return time.Since(t) }
+
+func (c *FrozenClock) Since(t time.Time) time.Duration {
+	return c.Now().Sub(t)
+}
+
 func (c *FrozenClock) Sleep(ctx context.Context, d time.Duration) error {
-	// Для простоты используем реальное ожидание (обычно в unit-тестах не зовут Sleep).
+	// Для простоты используем реальное ожидание (обычно в unit-тестах Sleep не зовут).
 	if d <= 0 {
 		select {
 		case <-ctx.Done():
@@ -92,8 +110,10 @@ func (c *FrozenClock) Sleep(ctx context.Context, d time.Duration) error {
 			return nil
 		}
 	}
+
 	timer := time.NewTimer(d)
 	defer timer.Stop()
+
 	select {
 	case <-timer.C:
 		return nil
@@ -101,11 +121,13 @@ func (c *FrozenClock) Sleep(ctx context.Context, d time.Duration) error {
 		return ctx.Err()
 	}
 }
+
 func (c *FrozenClock) Set(t time.Time) {
 	c.mu.Lock()
-	c.t = t
+	c.t = t.UTC()
 	c.mu.Unlock()
 }
+
 func (c *FrozenClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.t = c.t.Add(d)
@@ -121,7 +143,10 @@ var Default Clock = UTCClock{}
 func Now() time.Time { return Default.Now() }
 
 // PtrNow — указатель на Now() (UTC).
-func PtrNow() *time.Time { t := Default.Now(); return &t }
+func PtrNow() *time.Time {
+	t := Default.Now()
+	return &t
+}
 
 // StartOfDay — начало суток для заданной локали (возвращает в UTC).
 // Пример: StartOfDay(Now(), time.FixedZone("Asia/Bangkok", 7*3600))
