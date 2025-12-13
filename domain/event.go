@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vortex-fintech/go-lib/utils/timeutil"
 )
 
 type Event interface {
@@ -68,7 +69,7 @@ func NewBaseEvent(name, producer string) (BaseEvent, error) {
 
 	return BaseEvent{
 		Name:          name,
-		At:            time.Now().UTC(),
+		At:            timeutil.Now().UTC(), // ✅ жёстко приводим к UTC
 		ID:            uuid.New(),
 		SchemaVersion: 1,
 		Producer:      producer,
@@ -76,7 +77,6 @@ func NewBaseEvent(name, producer string) (BaseEvent, error) {
 }
 
 // MustBaseEvent — удобный хелпер для мест, где name/producer константы.
-// Используй в конструкторах событий, чтобы не тащить error вверх.
 func MustBaseEvent(name, producer string) BaseEvent {
 	e, err := NewBaseEvent(name, producer)
 	if err != nil {
@@ -123,6 +123,9 @@ func (e BaseEvent) WithMeta(k, v string) BaseEvent {
 }
 
 func (e BaseEvent) WithSchema(ver int32) BaseEvent {
+	if ver <= 0 {
+		return e
+	}
 	if ver > e.SchemaVersion {
 		e.SchemaVersion = ver
 	}
@@ -138,10 +141,12 @@ func (e BaseEvent) Validate() error {
 	if strings.TrimSpace(e.Producer) == "" {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventProducer)
 	}
-	// At должен быть заполнен и строго в UTC (без локальной локации)
-	if e.At.IsZero() || !e.At.Equal(e.At.UTC()) {
+
+	// ✅ At должен быть заполнен и иметь Location == UTC (это и есть "строго UTC")
+	if e.At.IsZero() || e.At.Location() != time.UTC {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventTime)
 	}
+
 	if e.ID == uuid.Nil {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventID)
 	}
@@ -152,7 +157,6 @@ func (e BaseEvent) Validate() error {
 }
 
 // Interface implementation
-
 func (e BaseEvent) EventName() string     { return e.Name }
 func (e BaseEvent) OccurredAt() time.Time { return e.At } // ожидаем UTC
 func (e BaseEvent) EventID() uuid.UUID    { return e.ID }
