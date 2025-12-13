@@ -153,19 +153,19 @@ func WithDefault(c Clock) (restore func()) {
 }
 
 // Now — алиас для DefaultClock().Now().
-// Ожидаем UTC по контракту Clock.
-func Now() time.Time { return DefaultClock().Now() }
+// Гарантируем UTC даже если кто-то подложил Clock, который возвращает не-UTC.
+func Now() time.Time { return DefaultClock().Now().UTC() }
+
+func PtrNow() *time.Time {
+	t := Now()
+	return &t
+}
 
 // Since — сахар для DefaultClock().Since(t).
 func Since(t time.Time) time.Duration { return DefaultClock().Since(t) }
 
 // Sleep — сахар для DefaultClock().Sleep(ctx, d).
 func Sleep(ctx context.Context, d time.Duration) error { return DefaultClock().Sleep(ctx, d) }
-
-func PtrNow() *time.Time {
-	t := Now()
-	return &t
-}
 
 // StartOfDay — начало суток для заданной локали (возвращает в UTC).
 func StartOfDay(t time.Time, loc *time.Location) time.Time {
