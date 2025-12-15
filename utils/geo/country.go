@@ -10,6 +10,9 @@ func NormalizeISO2(code string) (string, bool) {
 	if len(c) != 2 {
 		return "", false
 	}
+	if c[0] < 'A' || c[0] > 'Z' || c[1] < 'A' || c[1] > 'Z' {
+		return "", false
+	}
 	return c, true
 }
 
