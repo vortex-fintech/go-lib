@@ -96,7 +96,7 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 
 		uid, err := uuid.Parse(cl.Subject)
 		if err != nil {
-			return nil, status.Error(codes.PermissionDenied, libjwt.ErrBadSubject.Error())
+			return nil, status.Error(codes.Unauthenticated, libjwt.ErrBadSubject.Error())
 		}
 		sc := cl.EffectiveScopes()
 
@@ -161,7 +161,7 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 
 		uid, err := uuid.Parse(cl.Subject)
 		if err != nil {
-			return status.Error(codes.PermissionDenied, libjwt.ErrBadSubject.Error())
+			return status.Error(codes.Unauthenticated, libjwt.ErrBadSubject.Error())
 		}
 		sc := cl.EffectiveScopes()
 
