@@ -39,6 +39,24 @@ func TestCloneTimePtrUTC(t *testing.T) {
 	}
 }
 
+func TestUTCOrZero(t *testing.T) {
+	t.Parallel()
+
+	zero := time.Time{}
+	if got := UTCOrZero(zero); !got.IsZero() {
+		t.Fatalf("zero time must stay zero, got %v", got)
+	}
+
+	local := time.Date(2026, 2, 9, 10, 0, 0, 0, time.FixedZone("UTC+5", 5*60*60))
+	got := UTCOrZero(local)
+	if !got.Equal(local) {
+		t.Fatalf("expected same instant, got %v and %v", got, local)
+	}
+	if !IsUTC(got) {
+		t.Fatalf("expected UTC output")
+	}
+}
+
 func TestNextRevisionState(t *testing.T) {
 	t.Parallel()
 

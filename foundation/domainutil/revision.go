@@ -15,6 +15,13 @@ func CloneTimePtrUTC(p *time.Time) *time.Time {
 	return &t
 }
 
+func UTCOrZero(t time.Time) time.Time {
+	if t.IsZero() {
+		return t
+	}
+	return t.UTC()
+}
+
 func NextRevisionState(updatedAt time.Time, revision int64, at time.Time) (time.Time, int64) {
 	t := at.UTC()
 	if t.Before(updatedAt) {
