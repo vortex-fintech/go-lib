@@ -77,7 +77,7 @@ type MemoryOptions struct {
 
 type InMemoryChecker struct {
 	mu       sync.Mutex
-	items    map[string]int64 // key -> expiresAt (unix sec)
+	items    map[string]time.Time // key -> expiresAt
 	opt      MemoryOptions
 	prefix   string
 	failOpen bool
@@ -85,7 +85,7 @@ type InMemoryChecker struct {
 
 func NewInMemoryChecker(opt MemoryOptions) *InMemoryChecker {
 	return &InMemoryChecker{
-		items:    make(map[string]int64),
+		items:    make(map[string]time.Time),
 		opt:      opt,
 		prefix:   "obo:jti",
 		failOpen: opt.FailOpen,
@@ -99,13 +99,13 @@ func (m *InMemoryChecker) SeenJTI(_ context.Context, namespace, jti string, ttl 
 	if ttl <= 0 {
 		ttl = m.opt.TTL
 	}
-	now := time.Now().Unix()
+	now := time.Now()
 	key := fmt.Sprintf("%s:%s:%s", m.prefix, namespace, jti)
 
 	// GC простейший: при каждом вызове чистим просроченные; при переполнении — дополнительная чистка.
 	if len(m.items) > 0 {
 		for k, exp := range m.items {
-			if exp <= now {
+			if !exp.After(now) {
 				delete(m.items, k)
 			}
 		}
@@ -114,7 +114,7 @@ func (m *InMemoryChecker) SeenJTI(_ context.Context, namespace, jti string, ttl 
 		// Наивный trim: удалим часть самых старых по сроку (простое проходное удаление)
 		limit := len(m.items) - m.opt.MaxItems + 1
 		for k, exp := range m.items {
-			if exp <= now {
+			if !exp.After(now) {
 				delete(m.items, k)
 				limit--
 				if limit <= 0 {
@@ -124,11 +124,11 @@ func (m *InMemoryChecker) SeenJTI(_ context.Context, namespace, jti string, ttl 
 		}
 	}
 
-	if exp, ok := m.items[key]; ok && exp > now {
+	if exp, ok := m.items[key]; ok && exp.After(now) {
 		// уже есть и не истёк — replay
 		return true, nil
 	}
-	m.items[key] = now + int64(ttl.Seconds())
+	m.items[key] = now.Add(ttl)
 	return false, nil
 }
 

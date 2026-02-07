@@ -48,27 +48,27 @@
 
 | Директория | Назначение |
 | --- | --- |
-| `authz/scope` | Проверка скоупов и политики доступа на уровне бизнес‑операций. |
-| `db/postgres` | Подключение к Postgres (pgxpool), runners, транзакции, тестовые хуки, Docker‑компоуз для интеграций. |
-| `db/redis` | Клиент Redis с поддержкой TLS, Sentinel, Cluster и проверкой доступности. |
-| `errors` | Конструкторы доменных ошибок, gRPC/HTTP адаптеры, пресеты и валидационные адаптеры. |
-| `graceful` | Метрики graceful-цикла, менеджер остановки (`graceful/shutdown`) и адаптеры для HTTP/gRPC. |
-| `grpc` | Набор middleware (authz, chain, circuit breaker, context cancel, errors, metrics), dialer и metadata/helpers. |
-| `hash` | SHA‑256 утилиты и тесты. |
-| `logger` | Обёртка над zap с безопасным синком и профилями окружений. |
-| `logutil` | Санитизация/редакция данных перед логированием. |
-| `metrics` | HTTP‑handler для `/metrics` и `/health` с встроенными стандартными метриками. |
-| `netutil` | Нормализация таймаутов и сетевые helpers. |
-| `retry` | Экспоненциальные и быстрые ретраи, уважающие контекст. |
+| `security/scope` | Проверка скоупов и политики доступа на уровне бизнес‑операций. |
+| `data/postgres` | Подключение к Postgres (pgxpool), runners, транзакции, тестовые хуки, Docker‑компоуз для интеграций. |
+| `data/redis` | Клиент Redis с поддержкой TLS, Sentinel, Cluster и проверкой доступности. |
+| `foundation/errors` | Конструкторы доменных ошибок, gRPC/HTTP адаптеры, пресеты и валидационные адаптеры. |
+| `runtime/graceful` | Метрики graceful-цикла, менеджер остановки (`runtime/shutdown`) и адаптеры для HTTP/gRPC. |
+| `transport/grpc` | Набор middleware (authz, chain, circuit breaker, context cancel, errors, metrics), dialer и metadata/helpers. |
+| `foundation/hash` | SHA‑256 утилиты и тесты. |
+| `foundation/logger` | Обёртка над zap с безопасным синком и профилями окружений. |
+| `foundation/logutil` | Санитизация/редакция данных перед логированием. |
+| `runtime/metrics` | HTTP‑handler для `/metrics` и `/health` с встроенными стандартными метриками. |
+| `foundation/netutil` | Нормализация таймаутов и сетевые helpers. |
+| `foundation/retry` | Экспоненциальные и быстрые ретраи, уважающие контекст. |
 | `security/hmacotp` | Генерация и проверка HMAC‑одноразовых кодов (e.g. device binding). |
 | `security/jwt` | JWKS‑верификатор, строгая OBO‑валидация, PoP-утилиты. |
 | `security/mtls` | mTLS конфигурации, загрузка сертификатов, hot reload, helpers для тестов. |
 | `security/replay` | Защита от повторного воспроизведения запросов. |
 | `security/tlsutil` | Расчёт `x5t` и связанные TLS‑утилиты. |
-| `timeutil` | UTC‑clock, sleep с отменой и helpers для тестирования времени. |
-| `validator` | Надстройка над `go-playground/validator` с маппингом тэгов в коды ошибок. |
+| `foundation/timeutil` | UTC‑clock, sleep с отменой и helpers для тестирования времени. |
+| `foundation/validator` | Надстройка над `go-playground/validator` с маппингом тэгов в коды ошибок. |
 
-В корне также находятся `Makefile` для унификации тестов/линтеров, `LICENSE` (MIT) и `go.mod` c Go 1.25 toolchain.
+В корне также находятся `Makefile` для унификации тестов/линтеров, `LICENSE` (MIT), `go.work` и `go.mod` внутри каждого модуля.
 
 ## Требования и установка
 
@@ -79,10 +79,10 @@
 Установка:
 
 ```bash
-go get github.com/vortex-fintech/go-lib@latest
+go get github.com/vortex-fintech/go-lib/foundation@latest
 ```
 
-После установки импортируйте только нужные подпакеты — модуль разбит на независимые части и не тянет лишние зависимости.
+После установки импортируйте только нужные подпакеты — репозиторий разделён на независимые модули (`foundation`, `security`, `transport`, `data`, `runtime`) и не тянет лишние зависимости.
 
 ## Быстрый старт
 
@@ -93,11 +93,11 @@ import (
     "context"
     "time"
 
-    gliberr "github.com/vortex-fintech/go-lib/errors"
-    "github.com/vortex-fintech/go-lib/db/postgres"
-    metricsmw "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw"
-    promrep "github.com/vortex-fintech/go-lib/grpc/middleware/metricsmw/promreporter"
-    chain "github.com/vortex-fintech/go-lib/grpc/middleware/chain"
+    gliberr "github.com/vortex-fintech/go-lib/foundation/errors"
+    "github.com/vortex-fintech/go-lib/data/postgres"
+    metricsmw "github.com/vortex-fintech/go-lib/transport/grpc/middleware/metricsmw"
+    promrep "github.com/vortex-fintech/go-lib/transport/grpc/middleware/metricsmw/promreporter"
+    chain "github.com/vortex-fintech/go-lib/transport/grpc/middleware/chain"
     "google.golang.org/grpc"
 )
 
@@ -158,27 +158,27 @@ func CreateUser() error {
 
 ### data layer
 
-- `db/postgres`: работа через `pgxpool.Pool`, runners (`RunnerFromPool`, `RunnerFromConn`), транзакции `WithTx`, обработка ошибок `IsUniqueViolation`, `Constraint`. В комплекте build-теги `unit`, `integration`, `testhooks` и docker-compose для CI.
-- `db/redis`: создание клиента с пингом и поддержкой TLS 1.2+, Sentinel/Cluster, graceful закрытие.
+- `data/postgres`: работа через `pgxpool.Pool`, runners (`RunnerFromPool`, `RunnerFromConn`), транзакции `WithTx`, обработка ошибок `IsUniqueViolation`, `Constraint`. В комплекте build-теги `unit`, `integration`, `testhooks` и docker-compose для CI.
+- `data/redis`: создание клиента с пингом и поддержкой TLS 1.2+, Sentinel/Cluster, graceful закрытие.
 
 ### сервисная инфраструктура
 
-- `graceful/shutdown`: менеджер, который запускает/останавливает несколько серверов, подписывается на SIGINT/SIGTERM, умеет различать «нормальные» ошибки (`http.ErrServerClosed`) и фатальные.
-- `graceful/metrics`: метрики времени остановки/ожидания, репортинг в Prometheus.
-- `metrics`: HTTP‑handler комбинирует `/metrics` и `/health` (GET/HEAD), автоматически регистрирует Go/process метрики и предоставляет простой API для ваших health‑проверок.
-- `logger`: инициализация zap логгера с безопасным `SafeSync` и пресетами профилей (`development`, `debug`, `production`).
-- `retry`, `timeutil`, `netutil`: контролируемые ретраи, mockable часы, санитария таймаутов — используются во всех остальных пакетах.
+- `runtime/shutdown`: менеджер, который запускает/останавливает несколько серверов, подписывается на SIGINT/SIGTERM, умеет различать «нормальные» ошибки (`http.ErrServerClosed`) и фатальные.
+- `runtime/graceful`: метрики времени остановки/ожидания, репортинг в Prometheus.
+- `runtime/metrics`: HTTP‑handler комбинирует `/metrics` и `/health` (GET/HEAD), автоматически регистрирует Go/process метрики и предоставляет простой API для ваших health‑проверок.
+- `foundation/logger`: инициализация zap логгера с безопасным `SafeSync` и пресетами профилей (`development`, `debug`, `production`).
+- `foundation/retry`, `foundation/timeutil`, `foundation/netutil`: контролируемые ретраи, mockable часы, санитария таймаутов — используются во всех остальных пакетах.
 
 ### вспомогательные пакеты
 
-- `authz/scope`: набор структур для описания политик (All/Any/Gloabl scopes) и функция `checker` для их проверки;
-- `hash`, `logutil`, `validator`, `grpc/metadata`, `grpc/dial`, `grpc/creds` и др. обеспечивают мелкие, но важные куски инфраструктуры.
+- `security/scope`: набор структур для описания политик (All/Any/Gloabl scopes) и функция `checker` для их проверки;
+- `foundation/hash`, `foundation/logutil`, `foundation/validator`, `transport/grpc/metadata`, `transport/grpc/dial`, `transport/grpc/creds` и др. обеспечивают мелкие, но важные куски инфраструктуры.
 
 ## Наблюдаемость и эксплуатация
 
-- `/metrics` и `/health` поднимаются вызовом `metrics.New`, который возвращает mux и Prometheus registerer. Таймаут health по умолчанию 500 мс, маршруты поддерживают только GET/HEAD.
+- `/metrics` и `/health` поднимаются вызовом `runtime/metrics.New`, который возвращает mux и Prometheus registerer. Таймаут health по умолчанию 500 мс, маршруты поддерживают только GET/HEAD.
 - gRPC наблюдаемость достигается комбинацией `metricsmw` и `promreporter`. Пакет предоставляет интерфейсы, совместимые с нашими стандартами именования.
-- `graceful/metrics` дополнительно публикует время запуска/остановки серверов и количество активных goroutine.
+- `runtime/graceful` дополнительно публикует время запуска/остановки серверов и количество активных goroutine.
 - Логирование централизовано через `logger.Init(name, env)` — в production профиле включены JSON-логи, stacktrace только для ошибок, а SafeSync гарантирует flush.
 
 ## Тестирование и качество
@@ -189,7 +189,7 @@ func CreateUser() error {
 
 ```powershell
 go test -count=1 -tags=unit ./...
-go test -count=1 -tags "unit testhooks" ./db/postgres
+go test -count=1 -tags "unit testhooks" ./data/postgres
 go vet ./...
 ```
 
@@ -204,9 +204,9 @@ go vet ./...
 ### Интеграционные тесты вручную
 
 ```powershell
-docker compose -f db/postgres/docker-compose.test.yml up -d --wait --wait-timeout 60
+docker compose -f data/postgres/docker-compose.test.yml up -d --wait --wait-timeout 60
 go test -count=1 -tags integration ./...
-docker compose -f db/postgres/docker-compose.test.yml down -v
+docker compose -f data/postgres/docker-compose.test.yml down -v
 ```
 
 ### Проверки перед релизом
@@ -214,19 +214,19 @@ docker compose -f db/postgres/docker-compose.test.yml down -v
 - `go build ./...`
 - `go vet ./...`
 - `go test -count=1 -tags=unit ./...`
-- `go test -count=1 -tags "unit testhooks" ./db/postgres`
+- `go test -count=1 -tags "unit testhooks" ./data/postgres`
 - `make test-integration` (при изменениях БД или TLS инфраструктуры)
 
 ## Интеграция в CI/CD
 
-1. Подключите `go env -w GOTOOLCHAIN=auto` либо используйте локальный toolchain 1.25.1 (см. `go.mod`).
+1. Подключите `go env -w GOTOOLCHAIN=auto` либо используйте локальный toolchain 1.25.1 (см. `go.work` и `go.mod` в модулях).
 2. Выполняйте `go test ./...` с нужными тегами в параллельных job’ах (unit/testhooks/integration).
 3. При необходимости запускайте `make up` для развёртывания Postgres перед интеграционными тестами и `make down`, чтобы гарантированно очистить тома.
 4. Публикуйте артефакты покрытий (`coverage.out`, `coverage.dbpgx.out`) для анализа качества.
 
 ## Версионирование и совместимость
 
-- Модуль `github.com/vortex-fintech/go-lib` следует SemVer.
+- Модули `github.com/vortex-fintech/go-lib/{foundation,security,transport,data,runtime}` следуют SemVer.
 - Мажорные релизы могут вносить ломающие изменения, но внутри одного мажора API стабильны.
 - Минимальная поддерживаемая версия Go — 1.25. Старшие версии также поддерживаются (используется `toolchain go1.25.1`).
 

@@ -24,10 +24,16 @@ func TestTLSConfigClient_OK(t *testing.T) {
 	if conf == nil {
 		t.Fatalf("tls.Config is nil")
 	}
-	if len(conf.Certificates) == 0 {
-		t.Fatalf("client certificate is missing")
+	if len(conf.Certificates) == 0 && conf.GetClientCertificate == nil {
+		t.Fatalf("client certificate source is missing")
 	}
-	if conf.RootCAs == nil {
-		t.Fatalf("RootCAs is nil")
+	if conf.RootCAs == nil && conf.VerifyConnection == nil {
+		t.Fatalf("server trust source is missing")
+	}
+	if conf.GetClientCertificate == nil {
+		t.Fatalf("GetClientCertificate callback is nil")
+	}
+	if conf.VerifyConnection == nil {
+		t.Fatalf("VerifyConnection callback is nil")
 	}
 }

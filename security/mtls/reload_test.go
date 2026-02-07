@@ -17,7 +17,7 @@ func TestReloader_TriggersOnChange(t *testing.T) {
 		CACertPath:     tc.CAPath,
 		CertPath:       tc.ServerCert,
 		KeyPath:        tc.ServerKey,
-		ReloadInterval: 10 * time.Millisecond, // фактически игнор (мы сами тиканём)
+		ReloadInterval: 0,
 	})
 	if err != nil {
 		t.Fatalf("TLSConfigServer: %v", err)
@@ -75,4 +75,12 @@ func mustRead(t *testing.T, p string) []byte {
 		t.Fatalf("read %s: %v", p, err)
 	}
 	return b
+}
+
+func TestReloader_Stop_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	r := NewReloader(Config{}, func(*bundle) {})
+	r.Stop()
+	r.Stop()
 }

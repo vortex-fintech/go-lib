@@ -13,6 +13,7 @@ import (
 
 // Sentinel errors (удобно матчить в вызывающем коде).
 var (
+	ErrNilClaims           = errors.New("jwt: nil claims")
 	ErrBadSubject          = errors.New("jwt: bad subject")
 	ErrAudMismatch         = errors.New("jwt: aud mismatch")
 	ErrMissingActor        = errors.New("jwt: missing actor")
@@ -126,6 +127,10 @@ type OBOValidateOptions struct {
 
 // ValidateOBO — строгая валидация OBO.
 func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
+	if cl == nil {
+		return ErrNilClaims
+	}
+
 	// 0) sub = UUID
 	if _, err := uuid.Parse(cl.Subject); err != nil {
 		return ErrBadSubject

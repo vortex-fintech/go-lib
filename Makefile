@@ -1,6 +1,7 @@
 APP_NAME := go-lib
 PKG := ./...
-DC := docker compose -f db/postgres/docker-compose.test.yml
+MODULES := foundation security transport data runtime
+DC := docker compose -f data/postgres/docker-compose.test.yml
 CONTAINER := go-lib-test-postgres
 
 # Используем bash (Git Bash / WSL)
@@ -13,7 +14,10 @@ SHELL := bash
 all: tidy build
 
 tidy:
-	go mod tidy
+	@set -e; \
+	for m in $(MODULES); do \
+		(cd $$m && go mod tidy); \
+	done
 
 build:
 	go build -v $(PKG)
@@ -22,7 +26,7 @@ build:
 # Юнит-тесты (включая testhooks)
 test:
 	go test -count=1 -tags=unit -v $(PKG)
-	go test -count=1 -tags="unit testhooks" -v ./db/postgres
+	go test -count=1 -tags="unit testhooks" -v ./data/postgres
 
 # Интеграция с Postgres
 test-integration: up wait-db
@@ -44,12 +48,12 @@ test-all:
 # С гонщиком (race)
 test-race:
 	go test -race -count=1 -tags=unit $(PKG)
-	go test -race -count=1 -tags="unit testhooks" -v ./db/postgres
+	go test -race -count=1 -tags="unit testhooks" -v ./data/postgres
 
 # Покрытие
 cover:
 	go test -count=1 -coverprofile=coverage.out -tags=unit $(PKG)
-	go test -count=1 -coverprofile=coverage.dbpgx.out -tags="unit testhooks" ./db/postgres
+	go test -count=1 -coverprofile=coverage.dbpgx.out -tags="unit testhooks" ./data/postgres
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Открой coverage.html в браузере."
 

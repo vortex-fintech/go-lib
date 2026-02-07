@@ -33,4 +33,7 @@ func TestTLSConfigServer_OK(t *testing.T) {
 	if conf.ClientCAs == nil {
 		t.Fatalf("ClientCAs is nil")
 	}
+	if conf.GetConfigForClient == nil {
+		t.Fatalf("GetConfigForClient callback is nil")
+	}
 }

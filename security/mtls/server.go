@@ -2,6 +2,7 @@ package mtls
 
 import (
 	"crypto/tls"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,6 +13,9 @@ func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 		return nil, nil, err
 	}
 
+	state := &atomic.Pointer[bundle]{}
+	state.Store(b)
+
 	tlsConf := &tls.Config{
 		MinVersion:               tls.VersionTLS12,
 		PreferServerCipherSuites: true,
@@ -21,6 +25,14 @@ func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 		// Disable session tickets to reduce key material reuse in internal mesh.
 		SessionTicketsDisabled: true,
 	}
+	tlsConf.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		current := state.Load()
+		conf := tlsConf.Clone()
+		conf.ClientCAs = current.rootPool
+		conf.Certificates = []tls.Certificate{current.cert}
+		conf.GetConfigForClient = nil
+		return conf, nil
+	}
 
 	// Curve and cipher preferences are mostly automatic in modern Go; keep defaults.
 
@@ -28,9 +40,7 @@ func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 	var r *Reloader
 	if c.ReloadInterval > 0 {
 		r = NewReloader(c, func(nb *bundle) {
-			// swap references in place
-			tlsConf.ClientCAs = nb.rootPool
-			tlsConf.Certificates = []tls.Certificate{nb.cert}
+			state.Store(nb)
 		})
 		r.Start(time.NewTicker(c.ReloadInterval))
 	}

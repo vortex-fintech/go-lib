@@ -165,21 +165,21 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 func (v *jwksVerifier) keyFor(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.RLock()
 	k := v.rsa[kid]
-	next := v.nextRefresh
 	v.mu.RUnlock()
 
 	if k != nil {
 		return k, nil
 	}
-	if time.Now().After(next) {
-		_ = v.refresh(ctx)
-		v.mu.RLock()
-		k = v.rsa[kid]
-		v.mu.RUnlock()
-		if k != nil {
-			return k, nil
-		}
+
+	// Unknown kid can mean key rotation happened before next scheduled refresh.
+	_ = v.refresh(ctx)
+	v.mu.RLock()
+	k = v.rsa[kid]
+	v.mu.RUnlock()
+	if k != nil {
+		return k, nil
 	}
+
 	return nil, errors.New("jwt: unknown kid")
 }
 

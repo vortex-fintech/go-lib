@@ -3,17 +3,19 @@ package mtls
 import (
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
 // Reloader is a tiny polling-based cert reloader to avoid external deps.
 type Reloader struct {
-	cfg     Config
-	lastCA  time.Time
-	lastCrt time.Time
-	lastKey time.Time
-	apply   func(*bundle) // called when new bundle is ready
-	stopCh  chan struct{}
+	cfg      Config
+	lastCA   time.Time
+	lastCrt  time.Time
+	lastKey  time.Time
+	apply    func(*bundle) // called when new bundle is ready
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewReloader(cfg Config, apply func(*bundle)) *Reloader {
@@ -44,7 +46,11 @@ func (r *Reloader) Start(t *time.Ticker) {
 	}()
 }
 
-func (r *Reloader) Stop() { close(r.stopCh) }
+func (r *Reloader) Stop() {
+	r.stopOnce.Do(func() {
+		close(r.stopCh)
+	})
+}
 
 func (r *Reloader) snap() {
 	r.lastCA = mtime(r.cfg.CACertPath)
