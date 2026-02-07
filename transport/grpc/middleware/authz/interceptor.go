@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	scope "github.com/vortex-fintech/go-lib/security/scope"
 	libjwt "github.com/vortex-fintech/go-lib/security/jwt"
+	scope "github.com/vortex-fintech/go-lib/security/scope"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -94,7 +94,10 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 			}
 		}
 
-		uid, _ := uuid.Parse(cl.Subject)
+		uid, err := uuid.Parse(cl.Subject)
+		if err != nil {
+			return nil, status.Error(codes.PermissionDenied, libjwt.ErrBadSubject.Error())
+		}
 		sc := cl.EffectiveScopes()
 
 		var p Policy
@@ -156,7 +159,10 @@ func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 			}
 		}
 
-		uid, _ := uuid.Parse(cl.Subject)
+		uid, err := uuid.Parse(cl.Subject)
+		if err != nil {
+			return status.Error(codes.PermissionDenied, libjwt.ErrBadSubject.Error())
+		}
 		sc := cl.EffectiveScopes()
 
 		var p Policy

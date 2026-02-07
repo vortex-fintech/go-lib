@@ -50,7 +50,7 @@ func (r *RedisChecker) SeenJTI(ctx context.Context, namespace, jti string, ttl t
 	if err != nil {
 		// Ошибка Redis: политикой решаем, пропускать (fail-open) или блокировать (fail-closed).
 		if r.failOpen {
-			return false, err
+			return false, nil
 		}
 		return true, err
 	}
