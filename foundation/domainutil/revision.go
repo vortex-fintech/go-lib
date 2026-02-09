@@ -1,6 +1,14 @@
 package domainutil
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrInvalidExpectedRevision = errors.New("invalid expected revision")
+	ErrRevisionConflict        = errors.New("revision conflict")
+)
 
 func IsUTC(t time.Time) bool {
 	_, off := t.Zone()
@@ -32,4 +40,14 @@ func NextRevisionState(updatedAt time.Time, revision int64, at time.Time) (time.
 		rev = 1
 	}
 	return t, rev
+}
+
+func RequireRevision(current, expected int64) error {
+	if expected <= 0 {
+		return ErrInvalidExpectedRevision
+	}
+	if current != expected {
+		return ErrRevisionConflict
+	}
+	return nil
 }

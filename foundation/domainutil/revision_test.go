@@ -1,6 +1,7 @@
 package domainutil
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -99,6 +100,30 @@ func TestNextRevisionState(t *testing.T) {
 		}
 		if !IsUTC(nextAt) {
 			t.Fatalf("expected UTC output")
+		}
+	})
+}
+
+func TestRequireRevision(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid expected revision", func(t *testing.T) {
+		err := RequireRevision(5, 0)
+		if !errors.Is(err, ErrInvalidExpectedRevision) {
+			t.Fatalf("got=%v, want ErrInvalidExpectedRevision", err)
+		}
+	})
+
+	t.Run("revision conflict", func(t *testing.T) {
+		err := RequireRevision(5, 4)
+		if !errors.Is(err, ErrRevisionConflict) {
+			t.Fatalf("got=%v, want ErrRevisionConflict", err)
+		}
+	})
+
+	t.Run("match", func(t *testing.T) {
+		if err := RequireRevision(5, 5); err != nil {
+			t.Fatalf("expected nil, got=%v", err)
 		}
 	})
 }
