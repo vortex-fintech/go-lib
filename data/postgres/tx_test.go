@@ -31,9 +31,10 @@ func TestWithSavepoint_Success(t *testing.T) {
 	tx := &txStub{}
 	c := &Client{}
 	run := txRunner{tx: tx}
+	txCtx := ContextWithRunner(context.Background(), run)
 
-	err := c.WithSavepoint(context.Background(), run, func(run Runner) error {
-		_, e := run.Exec(context.Background(), "SELECT 1")
+	err := c.WithSavepoint(txCtx, func(ctx context.Context) error {
+		_, e := MustRunnerFromContext(ctx).Exec(ctx, "SELECT 1")
 		return e
 	})
 	if err != nil {
@@ -56,9 +57,10 @@ func TestWithSavepoint_RollbackOnError(t *testing.T) {
 	tx := &txStub{}
 	c := &Client{}
 	run := txRunner{tx: tx}
+	txCtx := ContextWithRunner(context.Background(), run)
 
 	expected := errors.New("boom")
-	err := c.WithSavepoint(context.Background(), run, func(run Runner) error {
+	err := c.WithSavepoint(txCtx, func(context.Context) error {
 		return expected
 	})
 	if !errors.Is(err, expected) {

@@ -3,62 +3,82 @@ package errors
 import (
 	"errors"
 	"fmt"
-	"strings"
 )
 
-// одиночная доменная ошибка (инвариант)
-type DomainError struct {
+// InvariantKind — тип доменного инварианта.
+type InvariantKind string
+
+const (
+	KindDomain     InvariantKind = "domain"
+	KindState      InvariantKind = "state"
+	KindTransition InvariantKind = "transition"
+)
+
+// InvariantError — унифицированный тип для всех доменных ошибок (field, state, transition).
+type InvariantError struct {
+	Kind   InvariantKind
+	Base   error
 	Field  string
 	Reason string
 }
 
-func (e DomainError) Error() string {
-	if e.Field == "" {
-		return e.Reason
+func (e InvariantError) Error() string {
+	switch e.Kind {
+	case KindState:
+		if e.Reason == "" {
+			if e.Base == nil {
+				return "state: invalid"
+			}
+			return fmt.Sprintf("state: %v", e.Base)
+		}
+		if e.Base == nil {
+			return fmt.Sprintf("state: %s", e.Reason)
+		}
+		return fmt.Sprintf("state: %v: %s", e.Base, e.Reason)
+	case KindTransition:
+		if e.Reason == "" {
+			if e.Base == nil {
+				return "transition: invalid"
+			}
+			return fmt.Sprintf("transition: %v", e.Base)
+		}
+		if e.Base == nil {
+			return fmt.Sprintf("transition: %s", e.Reason)
+		}
+		return fmt.Sprintf("transition: %v: %s", e.Base, e.Reason)
+	default:
+		if e.Field == "" {
+			return e.Reason
+		}
+		return fmt.Sprintf("%s: %s", e.Field, e.Reason)
 	}
-	return fmt.Sprintf("%s: %s", e.Field, e.Reason)
 }
 
-func DomainInvariant(field, reason string) DomainError {
-	return DomainError{Field: field, Reason: reason}
+// Unwrap поддерживает errors.Is / errors.As
+func (e InvariantError) Unwrap() error {
+	return e.Base
 }
 
-func IsDomainError(err error) bool {
-	var de DomainError
-	return errors.As(err, &de)
+// DomainInvariant создаёт ошибку field-level инварианта.
+// Пример: "person.email: invalid_format"
+func DomainInvariant(field, reason string) error {
+	return InvariantError{Kind: KindDomain, Field: field, Reason: reason}
 }
 
-// батч доменных ошибок (несколько инвариантов за раз)
-type DomainErrors []DomainError
-
-func (es DomainErrors) Error() string {
-	if len(es) == 0 {
-		return "domain_errors: empty"
-	}
-	parts := make([]string, 0, len(es))
-	for _, e := range es {
-		parts = append(parts, e.Error())
-	}
-	return "domain_errors: " + strings.Join(parts, "; ")
+// StateInvariant создаёт ошибку состояния.
+// Пример: "state: invalid state: updatedAt before createdAt"
+func StateInvariant(base error, field, reason string) error {
+	return InvariantError{Kind: KindState, Base: base, Field: field, Reason: reason}
 }
 
-func ConvertDomainToValidation(err error) ErrorResponse {
-	var e DomainError
-	if errors.As(err, &e) {
-		return ValidationFields(map[string]string{e.Field: e.Reason})
-	}
-	return Internal().WithReason("unexpected_domain_error")
+// TransitionInvariant создаёт ошибку перехода.
+// Пример: "transition: invalid transition: cannot verify from PENDING"
+func TransitionInvariant(base error, field, reason string) error {
+	return InvariantError{Kind: KindTransition, Base: base, Field: field, Reason: reason}
 }
 
-func ConvertDomainErrorsToValidation(errs DomainErrors) ErrorResponse {
-	if len(errs) == 0 {
-		return InvalidArgument().WithReason("validation_failed")
-	}
-	fields := make(map[string]string, len(errs))
-	viol := make([]FieldViolation, 0, len(errs))
-	for _, e := range errs {
-		fields[e.Field] = e.Reason
-		viol = append(viol, FieldViolation{Field: e.Field, Reason: e.Reason})
-	}
-	return ValidationViolations(viol).WithDetails(fields)
+// IsInvariant проверяет является ли ошибка InvariantError.
+func IsInvariant(err error) bool {
+	var ie InvariantError
+	return errors.As(err, &ie)
 }

@@ -88,9 +88,10 @@ This README is intentionally detailed and documents what each tracked file does.
 - `foundation/errors/http_test.go` - Unit tests for HTTP error adapters.
 - `foundation/errors/validation_adapters_test.go` - Unit tests for validation adaptation behavior.
 
-### errx (`foundation/errx`)
+### textutil (`foundation/textutil`)
 
-- `foundation/errx/errx.go` - Small shared error utility helpers used across packages.
+- `foundation/textutil/canonical.go` - Canonical string normalization helpers.
+- `foundation/textutil/coalesce.go` - First-non-empty string helper utilities.
 
 ### geo (`foundation/geo`)
 

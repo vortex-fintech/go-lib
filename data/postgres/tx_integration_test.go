@@ -24,8 +24,9 @@ func TestWithTx_RollbackOnError_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	id := time.Now().UnixNano()
-	err = c.WithTx(ctx, func(run postgres.Runner) error {
-		_, e := run.Exec(ctx, "INSERT INTO tx_test(id) VALUES($1)", id)
+	err = c.WithTx(ctx, func(txCtx context.Context) error {
+		run := postgres.MustRunnerFromContext(txCtx)
+		_, e := run.Exec(txCtx, "INSERT INTO tx_test(id) VALUES($1)", id)
 		require.NoError(t, e)
 		return fmt.Errorf("force rollback")
 	})
@@ -45,12 +46,13 @@ func TestWithSerializable_RetriesOnSerializationFailure_Integration(t *testing.T
 	defer cancel()
 
 	attempts := 0
-	err := c.WithSerializable(ctx, 3, func(run postgres.Runner) error {
+	err := c.WithSerializable(ctx, 3, func(txCtx context.Context) error {
 		attempts++
 		if attempts < 3 {
 			return &pgconn.PgError{Code: "40001", Message: "serialization_failure"}
 		}
-		_, e := run.Exec(ctx, "SELECT 1")
+		run := postgres.MustRunnerFromContext(txCtx)
+		_, e := run.Exec(txCtx, "SELECT 1")
 		return e
 	})
 	require.NoError(t, err)

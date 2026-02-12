@@ -60,19 +60,18 @@ func toGRPC(err error, fallback func(error) error) error {
 	if _, ok := status.FromError(err); ok {
 		return err
 	}
+
 	// Наш тип с ToGRPC()
 	var conv grpcConvertible
 	if errors.As(err, &conv) {
 		return conv.ToGRPC()
 	}
-	// Один доменный
-	if gliberrors.IsDomainError(err) {
-		return gliberrors.ConvertDomainToValidation(err).ToGRPC()
+
+	// InvariantError через универcальный ToErrorResponse
+	if gliberrors.IsInvariant(err) {
+		return gliberrors.ToErrorResponse(err).ToGRPC()
 	}
-	// Батч доменных
-	if de, ok := err.(gliberrors.DomainErrors); ok {
-		return gliberrors.ConvertDomainErrorsToValidation(de).ToGRPC()
-	}
+
 	// Контекст
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, "Request canceled")
@@ -80,6 +79,7 @@ func toGRPC(err error, fallback func(error) error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.DeadlineExceeded, "Deadline exceeded")
 	}
+
 	// Фоллбек
 	return fallback(err)
 }

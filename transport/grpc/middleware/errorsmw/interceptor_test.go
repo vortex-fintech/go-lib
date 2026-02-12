@@ -64,10 +64,10 @@ func TestUnary_CustomFallback(t *testing.T) {
 }
 
 func TestToGRPC_DomainErrorsBatch(t *testing.T) {
-	de := gliberrors.DomainErrors{
-		{Field: "email", Reason: "invalid_email"},
-		{Field: "password", Reason: "too_short"},
-	}
+	de := gliberrors.ValidationFields(map[string]string{
+		"email":    "invalid_email",
+		"password": "too_short",
+	})
 	out := toGRPC(de, func(error) error { return nil })
 	st, _ := status.FromError(out)
 	if st.Code() != codes.InvalidArgument {

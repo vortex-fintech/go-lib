@@ -23,17 +23,32 @@ type TxConfig struct {
 }
 
 // WithTx — безопасная (panic-safe) транзакция с дефолтными опциями (ReadCommitted, RW).
-func (c *Client) WithTx(ctx context.Context, fn func(run Runner) error) (err error) {
+// Runner доступен через RunnerFromContext(ctx) / MustRunnerFromContext(ctx).
+func (c *Client) WithTx(ctx context.Context, fn func(ctx context.Context) error) (err error) {
 	return c.WithTxOpts(ctx, TxConfig{}, fn)
 }
 
 // WithTxRO — Read-Only транзакция (для консистентных чтений в несколько запросов).
-func (c *Client) WithTxRO(ctx context.Context, fn func(run Runner) error) error {
+func (c *Client) WithTxRO(ctx context.Context, fn func(ctx context.Context) error) error {
 	return c.WithTxOpts(ctx, TxConfig{ReadOnly: true}, fn)
 }
 
+// WithTxExplicit — backward-compatible: runner передаётся явно как аргумент callback.
+func (c *Client) WithTxExplicit(ctx context.Context, fn func(run Runner) error) error {
+	return c.WithTx(ctx, func(txCtx context.Context) error {
+		return fn(MustRunnerFromContext(txCtx))
+	})
+}
+
+// WithTxROExplicit — backward-compatible read-only variant.
+func (c *Client) WithTxROExplicit(ctx context.Context, fn func(run Runner) error) error {
+	return c.WithTxRO(ctx, func(txCtx context.Context) error {
+		return fn(MustRunnerFromContext(txCtx))
+	})
+}
+
 // WithSerializable — SERIALIZABLE + авто-ретраи на 40001 (serialization_failure), учитывает ctx.
-func (c *Client) WithSerializable(ctx context.Context, maxRetries int, fn func(run Runner) error) error {
+func (c *Client) WithSerializable(ctx context.Context, maxRetries int, fn func(ctx context.Context) error) error {
 	if maxRetries < 1 {
 		maxRetries = 3
 	}
@@ -55,7 +70,7 @@ func (c *Client) WithSerializable(ctx context.Context, maxRetries int, fn func(r
 }
 
 // Удобный хелпер: SERIALIZABLE + ReadOnly + (опц.) DEFERRABLE
-func (c *Client) WithSerializableRO(ctx context.Context, deferrable bool, fn func(run Runner) error) error {
+func (c *Client) WithSerializableRO(ctx context.Context, deferrable bool, fn func(ctx context.Context) error) error {
 	return c.WithTxOpts(ctx, TxConfig{
 		Iso:        pgx.Serializable,
 		ReadOnly:   true,
@@ -69,7 +84,7 @@ func isSerializationFailure(err error) bool {
 }
 
 // WithTxOpts — транзакция с опциями + panic-safe commit/rollback + локальные SET LOCAL таймауты.
-func (c *Client) WithTxOpts(ctx context.Context, cfg TxConfig, fn func(run Runner) error) (err error) {
+func (c *Client) WithTxOpts(ctx context.Context, cfg TxConfig, fn func(ctx context.Context) error) (err error) {
 	opts := pgx.TxOptions{
 		IsoLevel:   cfg.Iso,
 		AccessMode: pgx.ReadWrite,
@@ -124,25 +139,29 @@ func (c *Client) WithTxOpts(ctx context.Context, cfg TxConfig, fn func(run Runne
 	}
 
 	run := txRunner{tx: tx}
-	err = fn(run)
+	txCtx := ContextWithRunner(ctx, run)
+	err = fn(txCtx)
 	return err
 }
 
 // WithSavepoint — если уже внутри транзакции, создаёт SAVEPOINT; иначе откроет обычную TX.
-func (c *Client) WithSavepoint(ctx context.Context, run Runner, fn func(run Runner) error) error {
+func (c *Client) WithSavepoint(ctx context.Context, fn func(ctx context.Context) error) error {
 	// Уже в транзакции?
-	if tx, ok := asTx(run); ok {
-		sp := fmt.Sprintf("sp_%d", time.Now().UnixNano())
-		if _, err := tx.Exec(ctx, "SAVEPOINT "+sp); err != nil {
-			return err
+	if r, ok := ctx.Value(ctxKeyRunner{}).(Runner); ok {
+		if tx, ok := asTx(r); ok {
+			sp := fmt.Sprintf("sp_%d", time.Now().UnixNano())
+			if _, err := tx.Exec(ctx, "SAVEPOINT "+sp); err != nil {
+				return err
+			}
+			spCtx := ContextWithRunner(ctx, txRunner{tx: tx})
+			if err := fn(spCtx); err != nil {
+				_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+sp)
+				_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+sp)
+				return err
+			}
+			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+sp)
+			return nil
 		}
-		if err := fn(txRunner{tx: tx}); err != nil {
-			_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT "+sp)
-			_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+sp) // можно опустить
-			return err
-		}
-		_, _ = tx.Exec(ctx, "RELEASE SAVEPOINT "+sp)
-		return nil
 	}
 	// Вне транзакции — обычная WithTx.
 	return c.WithTx(ctx, fn)
