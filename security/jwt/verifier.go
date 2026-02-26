@@ -14,6 +14,7 @@ import (
 // Sentinel errors (удобно матчить в вызывающем коде).
 var (
 	ErrNilClaims           = errors.New("jwt: nil claims")
+	ErrAudienceRequired    = errors.New("jwt: audience is required")
 	ErrBadSubject          = errors.New("jwt: bad subject")
 	ErrAudMismatch         = errors.New("jwt: aud mismatch")
 	ErrMissingActor        = errors.New("jwt: missing actor")
@@ -134,6 +135,10 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 	// 0) sub = UUID
 	if _, err := uuid.Parse(cl.Subject); err != nil {
 		return ErrBadSubject
+	}
+
+	if strings.TrimSpace(opt.WantAudience) == "" {
+		return ErrAudienceRequired
 	}
 
 	// 1) aud: ровно один и тот, который ожидаем

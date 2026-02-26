@@ -30,7 +30,7 @@ if err != nil {
 
 ```go
 opt := jwt.OBOValidateOptions{
-    WantAudience:    "wallet",
+    WantAudience:    "wallet", // required
     WantActor:       "api-gateway",
     AllowedAZP:      []string{"vortex-web", "mobile-app"},
     Leeway:          5 * time.Second,
@@ -109,6 +109,7 @@ func (c Claims) HasScopes(required ...string) bool
 |-------|-----------|
 | `ErrNilClaims` | Claims pointer is nil |
 | `ErrBadSubject` | Subject is not a valid UUID |
+| `ErrAudienceRequired` | `WantAudience` option is empty or whitespace |
 | `ErrAudMismatch` | Audience doesn't match expected |
 | `ErrMissingActor` | Actor claim is missing |
 | `ErrActorMismatch` | Actor doesn't match expected |
@@ -152,6 +153,7 @@ if err := jwt.ValidateOBO(now, claims, opt); err != nil {
 ## Production notes
 
 - Set `MaxTTL` to limit token lifetime (e.g., 1 hour)
+- `WantAudience` is mandatory in `OBOValidateOptions` and must match your service
 - Always validate `aud` matches your service
 - Use `SeenJTI` callback with Redis for distributed replay protection
 - Enable mTLS binding for high-security services
