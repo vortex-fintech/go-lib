@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"crypto/tls"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,14 +14,19 @@ var NewUniversal = func(opt *redis.UniversalOptions) redis.UniversalClient {
 }
 
 func NewRedisClient(ctx context.Context, cfg Config) (redis.UniversalClient, error) {
-	addrs := cfg.Addrs
-	if len(addrs) == 0 && cfg.Addr != "" {
-		addrs = []string{cfg.Addr}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	mode := normalizeMode(cfg.Mode)
+	addrs := normalizeAddrs(cfg)
+	if err := validateConfig(cfg, mode, addrs); err != nil {
+		return nil, err
 	}
 
 	opt := &redis.UniversalOptions{
 		Addrs:        addrs,
-		MasterName:   cfg.MasterName,
+		MasterName:   strings.TrimSpace(cfg.MasterName),
 		DB:           cfg.DB,
 		Username:     cfg.Username,
 		Password:     cfg.Password,

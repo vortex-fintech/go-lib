@@ -6,7 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// SQLSTATE коды (нужные минимум)
+// SQLSTATE codes used by this package.
 const (
 	SQLStateUniqueViolation     = "23505"
 	SQLStateForeignKeyViolation = "23503"
@@ -38,7 +38,7 @@ func Constraint(err error) (ConstraintInfo, bool) {
 	return info, true
 }
 
-// Узкие хелперы
+// Narrow helper predicates.
 func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == SQLStateUniqueViolation

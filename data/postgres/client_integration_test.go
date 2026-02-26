@@ -12,10 +12,10 @@ import (
 )
 
 func TestOpen_Integration(t *testing.T) {
-	// docker-compose: порт 5433
+	// docker-compose publishes port 5433
 	cfg := postgres.Config{
 		URL: "postgres://testuser:testpass@localhost:5433/testdb?sslmode=disable",
-		// можно задать лимиты пула
+		// pool limits can be set here
 		MaxConns: 5, MinConns: 1,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -26,7 +26,7 @@ func TestOpen_Integration(t *testing.T) {
 	require.NotNil(t, c)
 	defer c.Close()
 
-	// простой sanity check
+	// simple sanity check
 	run := c.RunnerFromPool()
 	row := run.QueryRow(ctx, "SELECT 1")
 	var x int

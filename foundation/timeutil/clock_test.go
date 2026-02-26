@@ -87,7 +87,7 @@ func TestFrozenClock_SleepCancelledDoesNotAdvance(t *testing.T) {
 }
 
 func TestOffsetClock_BaseNil_NoRecursionAndUTC(t *testing.T) {
-	// Важно: OffsetClock{Base:nil} не должен зависеть от DefaultClock()
+	// OffsetClock{Base:nil} must not depend on DefaultClock().
 	restore := timeutil.WithDefault(timeutil.OffsetClock{Base: nil, Offset: time.Hour})
 	t.Cleanup(restore)
 
@@ -133,5 +133,35 @@ func TestStartOfDay_ReturnsUTCStartOfLocalDay(t *testing.T) {
 	}
 	if got.Location() != time.UTC {
 		t.Fatalf("expected UTC location, got %v", got.Location())
+	}
+}
+
+func TestMonotonic_ResolvesBackwardsTime(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(-time.Second) // "now" is before "prev"
+
+	// Should return prev
+	got := timeutil.Monotonic(t2, t1)
+	if !got.Equal(t1) {
+		t.Fatalf("expected prev (t1), got %v", got)
+	}
+
+	// Should return now if now > prev
+	t3 := t1.Add(time.Second)
+	got = timeutil.Monotonic(t3, t1)
+	if !got.Equal(t3) {
+		t.Fatalf("expected now (t3), got %v", got)
+	}
+
+	// Should return prev when equal
+	got = timeutil.Monotonic(t1, t1)
+	if !got.Equal(t1) {
+		t.Fatalf("expected prev when equal, got %v", got)
+	}
+
+	// Should return now if prev is zero
+	got = timeutil.Monotonic(t2, time.Time{})
+	if !got.Equal(t2) {
+		t.Fatalf("expected now (t2) when prev is zero, got %v", got)
 	}
 }

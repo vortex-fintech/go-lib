@@ -62,6 +62,37 @@ func (f *fakeServer) ForceStop() {
 	f.stopOnce.Do(func() { close(f.stoppedCh) })
 }
 
+type blockingGracefulServer struct {
+	name      string
+	stopOnce  sync.Once
+	stoppedCh chan struct{}
+	forced    atomic.Bool
+}
+
+func newBlockingGracefulServer(name string) *blockingGracefulServer {
+	return &blockingGracefulServer{name: name, stoppedCh: make(chan struct{})}
+}
+
+func (s *blockingGracefulServer) Name() string { return s.name }
+
+func (s *blockingGracefulServer) Serve(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.stoppedCh:
+		return nil
+	}
+}
+
+func (s *blockingGracefulServer) GracefulStopWithTimeout(context.Context) error {
+	select {}
+}
+
+func (s *blockingGracefulServer) ForceStop() {
+	s.forced.Store(true)
+	s.stopOnce.Do(func() { close(s.stoppedCh) })
+}
+
 type logEvent struct {
 	level string
 	msg   string
@@ -237,6 +268,38 @@ func Test_Stop_ForceOnTimeout(t *testing.T) {
 	<-ch
 	if !s.forced.Load() {
 		t.Fatal("expected ForceStop on graceful timeout")
+	}
+}
+
+func Test_Stop_ForceWhenGracefulBlocksForever(t *testing.T) {
+	t.Parallel()
+
+	met := newFakeMetrics()
+	m := New(Config{ShutdownTimeout: 60 * time.Millisecond, Metrics: met})
+	s := newBlockingGracefulServer("blocked-graceful")
+	m.Add(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not finish when graceful stop blocked")
+	}
+
+	if !s.forced.Load() {
+		t.Fatal("expected ForceStop when graceful stop blocks forever")
+	}
+	if got := met.serverStopResult["blocked-graceful"]["force"]; got < 1 {
+		t.Fatalf("expected per-server force metric, got %d", got)
 	}
 }
 
@@ -453,5 +516,15 @@ func Test_fakeServer_GracefulDeadlineProducesError(t *testing.T) {
 	err := s.GracefulStopWithTimeout(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected deadline/canceled error, got %v", err)
+	}
+}
+
+func Test_Add_NilServer_Ignored(t *testing.T) {
+	t.Parallel()
+	m := New(Config{ShutdownTimeout: 100 * time.Millisecond})
+	m.Add(nil)
+
+	if len(m.servers) != 0 {
+		t.Fatalf("expected 0 servers, got %d", len(m.servers))
 	}
 }

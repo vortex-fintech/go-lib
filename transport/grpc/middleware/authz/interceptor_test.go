@@ -171,6 +171,26 @@ func TestUnaryServerInterceptor_MissingPoP(t *testing.T) {
 	}
 }
 
+func TestUnaryServerInterceptor_RequirePoPDisabled_AllowsMissingPoP(t *testing.T) {
+	t.Parallel()
+
+	v := &verifierStub{claims: validClaims("thumb")}
+	interceptor := UnaryServerInterceptor(Config{
+		Verifier:       v,
+		Audience:       "wallet",
+		Actor:          "api-gateway",
+		RequireScopes:  true,
+		RequirePoP:     false,
+		MTLSThumbprint: func(context.Context) string { return "" },
+	})
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
+	_, err := interceptor(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/svc.Method"}, passHandler)
+	if err != nil {
+		t.Fatalf("expected no error when RequirePoP=false, got %v", err)
+	}
+}
+
 func TestStreamServerInterceptor_SetsIdentityAndClaims(t *testing.T) {
 	t.Parallel()
 

@@ -2,7 +2,7 @@ module github.com/vortex-fintech/go-lib/foundation
 
 go 1.25
 
-toolchain go1.25.1
+toolchain go1.25.7
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.2
@@ -27,7 +27,7 @@ require (
 	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/text v0.31.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

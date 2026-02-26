@@ -5,57 +5,87 @@ import (
 	ctxcancel "github.com/vortex-fintech/go-lib/transport/grpc/middleware/contextcancel"
 	errorsmw "github.com/vortex-fintech/go-lib/transport/grpc/middleware/errorsmw"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
-// Options задаёт порядок и состав цепочки unary-интерсепторов.
-// Итоговая последовательность вызовов:
-//
-//	Pre (например, метрики) → (ctxcancel) → (authz) → (circuitbreaker) → (errors) → Post
 type Options struct {
-	// Пользовательские перехватчики, исполняются раньше/позже встроенных.
 	Pre  []grpc.UnaryServerInterceptor
 	Post []grpc.UnaryServerInterceptor
 
-	// Встроенные
-	AuthzInterceptor grpc.UnaryServerInterceptor // если nil — не включаем
-	CircuitBreaker   *cb.Interceptor             // если nil — не включаем
-	DisableCtxCancel bool                        // по умолчанию false => включено
-	DisableErrors    bool                        // по умолчанию false => включено
+	AuthzInterceptor grpc.UnaryServerInterceptor
+	CircuitBreaker   *cb.Interceptor
+	DisableCtxCancel bool
+	DisableErrors    bool
 }
 
-// Default возвращает grpc.ServerOption с собранной цепочкой перехватчиков.
+type StreamOptions struct {
+	Pre  []grpc.StreamServerInterceptor
+	Post []grpc.StreamServerInterceptor
+
+	AuthzInterceptor grpc.StreamServerInterceptor
+	DisableCtxCancel bool
+	DisableErrors    bool
+}
+
 func Default(opts Options) grpc.ServerOption {
 	var chain []grpc.UnaryServerInterceptor
 
-	// Pre (например, метрики) — первыми
 	if len(opts.Pre) > 0 {
 		chain = append(chain, opts.Pre...)
 	}
 
-	// Контроль отмены контекста
 	if !opts.DisableCtxCancel {
 		chain = append(chain, ctxcancel.Unary())
 	}
 
-	// Авторизация
 	if opts.AuthzInterceptor != nil {
 		chain = append(chain, opts.AuthzInterceptor)
 	}
 
-	// CircuitBreaker
 	if opts.CircuitBreaker != nil {
 		chain = append(chain, opts.CircuitBreaker.Unary())
 	}
 
-	// Errors middleware
 	if !opts.DisableErrors {
 		chain = append(chain, errorsmw.Unary())
 	}
 
-	// Post — последними
 	if len(opts.Post) > 0 {
 		chain = append(chain, opts.Post...)
 	}
 
 	return grpc.ChainUnaryInterceptor(chain...)
+}
+
+func DefaultStream(opts StreamOptions) grpc.ServerOption {
+	var chain []grpc.StreamServerInterceptor
+
+	if len(opts.Pre) > 0 {
+		chain = append(chain, opts.Pre...)
+	}
+
+	if !opts.DisableCtxCancel {
+		chain = append(chain, streamCtxCancel)
+	}
+
+	if opts.AuthzInterceptor != nil {
+		chain = append(chain, opts.AuthzInterceptor)
+	}
+
+	if !opts.DisableErrors {
+		chain = append(chain, errorsmw.Stream())
+	}
+
+	if len(opts.Post) > 0 {
+		chain = append(chain, opts.Post...)
+	}
+
+	return grpc.ChainStreamInterceptor(chain...)
+}
+
+func streamCtxCancel(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	if err := ss.Context().Err(); err != nil {
+		return status.FromContextError(err).Err()
+	}
+	return handler(srv, ss)
 }

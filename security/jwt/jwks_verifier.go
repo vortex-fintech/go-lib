@@ -74,8 +74,10 @@ func NewJWKSVerifier(cfg JWKSConfig) (Verifier, error) {
 }
 
 func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) {
+	ctx = ensureContext(ctx)
+
 	// мягкий refresh
-	if time.Now().After(v.nextRefresh) {
+	if time.Now().After(v.nextRefreshAt()) {
 		_ = v.refresh(ctx)
 	}
 
@@ -163,6 +165,8 @@ func (v *jwksVerifier) Verify(ctx context.Context, raw string) (*Claims, error) 
 }
 
 func (v *jwksVerifier) keyFor(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	ctx = ensureContext(ctx)
+
 	v.mu.RLock()
 	k := v.rsa[kid]
 	v.mu.RUnlock()
@@ -184,12 +188,17 @@ func (v *jwksVerifier) keyFor(ctx context.Context, kid string) (*rsa.PublicKey, 
 }
 
 func (v *jwksVerifier) refresh(ctx context.Context) error {
+	ctx = ensureContext(ctx)
+
 	if v.cfg.URL == "" {
 		return errors.New("jwks: empty url")
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, v.cfg.URL, nil)
-	if v.etag != "" {
-		req.Header.Set("If-None-Match", v.etag)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.cfg.URL, nil)
+	if err != nil {
+		return err
+	}
+	if etag := v.currentETag(); etag != "" {
+		req.Header.Set("If-None-Match", etag)
 	}
 	resp, err := v.httpClient.Do(req)
 	if err != nil {
@@ -231,22 +240,29 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 
 		nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
 		if err != nil {
-			return err
+			continue
 		}
 		eBytes, err := base64.RawURLEncoding.DecodeString(k.E)
 		if err != nil {
-			return err
+			continue
 		}
-		var e int
-		switch len(eBytes) {
-		case 3:
-			e = int(eBytes[0])<<16 | int(eBytes[1])<<8 | int(eBytes[2])
-		case 1:
-			e = int(eBytes[0])
-		default:
-			e = 65537
+		if len(nBytes) == 0 {
+			continue
 		}
+
+		eBig := new(big.Int).SetBytes(eBytes)
+		if !eBig.IsInt64() {
+			continue
+		}
+		e := int(eBig.Int64())
+		if e < 3 || e%2 == 0 {
+			continue
+		}
+
 		m[k.Kid] = &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: e}
+	}
+	if len(m) == 0 {
+		return errors.New("jwks: no valid rsa keys")
 	}
 
 	v.mu.Lock()
@@ -255,6 +271,20 @@ func (v *jwksVerifier) refresh(ctx context.Context) error {
 	v.nextRefresh = time.Now().Add(v.refreshIntervalFromHeaders(resp.Header))
 	v.mu.Unlock()
 	return nil
+}
+
+func (v *jwksVerifier) nextRefreshAt() time.Time {
+	v.mu.RLock()
+	next := v.nextRefresh
+	v.mu.RUnlock()
+	return next
+}
+
+func (v *jwksVerifier) currentETag() string {
+	v.mu.RLock()
+	etag := v.etag
+	v.mu.RUnlock()
+	return etag
 }
 
 func (v *jwksVerifier) refreshIntervalFromHeaders(h http.Header) time.Duration {
@@ -382,13 +412,21 @@ func verifyRS256(pub *rsa.PublicKey, payload, sig []byte) error {
 
 func verifyPS256(pub *rsa.PublicKey, payload, sig []byte) error {
 	h := sha256.Sum256(payload)
-	// Рекомендованный режим для JWT PS256: salt = len(hash)
 	opts := &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash, Hash: crypto.SHA256}
 	return rsa.VerifyPSS(pub, crypto.SHA256, h[:], sig, opts)
 }
 
-// X5tS256FromCert — x5t#S256 (base64url без паддинга) из DER-серта.
 func X5tS256FromCert(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	sum := sha256.Sum256(cert.Raw)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func ensureContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }

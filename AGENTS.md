@@ -1,163 +1,90 @@
 # AGENTS.md
 
-## Purpose
-- Guide for autonomous coding agents in `github.com/vortex-fintech/go-lib`.
-- Prefer minimal, targeted changes and keep package conventions intact.
-- Avoid broad refactors unless explicitly requested.
+Operational guide for agentic coding assistants working in `go-lib` workspace.
 
-## Repository Snapshot
-- Multi-module workspace (`go.work`) with modules:
-  - `github.com/vortex-fintech/go-lib/foundation`
-  - `github.com/vortex-fintech/go-lib/security`
-  - `github.com/vortex-fintech/go-lib/transport`
-  - `github.com/vortex-fintech/go-lib/data`
-  - `github.com/vortex-fintech/go-lib/runtime`
-- Go: `go 1.25`, toolchain `go1.25.1`
-- Main entrypoints: `Makefile`, `README.md`, `go.work`
-- Integration infra: `data/postgres/docker-compose.test.yml`
-- Build tags used: `unit`, `testhooks`, `integration`, `unix`
+## Scope
 
-## Local Rule Files (must check)
-- Cursor rules: not found (`.cursor/rules/`, `.cursorrules`)
-- Copilot rules: not found (`.github/copilot-instructions.md`)
+- Workspace root: `C:\Vortex Services\go-lib`
+- Language: Go
+- Go version: `go 1.25`
+- Toolchain: `go1.25.7`
+- Modules (from `go.work`):
+  - `./foundation`
+  - `./security`
+  - `./transport`
+  - `./data`
+  - `./runtime`
+  - `./messaging/kafka/franzgo`
+  - `./messaging/kafka/schemaregistry`
 
-## Build / Lint / Test Commands
+## Rule precedence
+
+1. Root `AGENTS.md` (this file) defines cross-workspace defaults.
+2. Module-level `AGENTS.md` files define package-specific rules and override root defaults for that module:
+   - `foundation/AGENTS.md`
+   - `security/AGENTS.md`
+   - `transport/AGENTS.md`
+   - `data/AGENTS.md`
+   - `runtime/AGENTS.md`
+   - `messaging/AGENTS.md`
+
+When editing files inside a module, always follow that module's `AGENTS.md` as the primary source.
+
+## Workspace build / test policy
+
+Run checks per module (not `go test ./...` from workspace root).
 
 ### Build
+
 ```bash
-go build -v ./...
-make build
+for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+  (cd "$m" && go build ./...)
+done
 ```
 
-### Dependency hygiene
+### Tests
+
 ```bash
-for m in foundation security transport data runtime; do (cd "$m" && go mod tidy); done
-make tidy
+for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+  (cd "$m" && go test -count=1 ./...)
+done
 ```
 
-### Lint / static checks
+### Unit-tagged suites
+
 ```bash
-go vet ./...
+(cd foundation && go test -count=1 -tags unit ./...)
+(cd runtime && go test -count=1 -tags unit ./...)
+(cd data && go test -count=1 -tags "unit testhooks" ./postgres)
 ```
 
-### Unit tests (default)
+### Vet
+
 ```bash
-go test -count=1 -tags=unit -v ./...
-go test -count=1 -tags="unit testhooks" -v ./data/postgres
-make test
+for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+  (cd "$m" && go vet ./...)
+done
 ```
 
-### Integration tests
-```bash
-make test-integration
-```
-Manual flow:
-```bash
-docker compose -f data/postgres/docker-compose.test.yml up -d --wait --wait-timeout 60
-go test -count=1 -tags=integration -v ./...
-docker compose -f data/postgres/docker-compose.test.yml down -v
-```
+### Integration and race
 
-### Full checks
-```bash
-make test-all
-make test-race
-make cover
-```
+- Integration tests use Docker infrastructure for Postgres, Redis, and Redpanda.
+- Race checks should run in Docker using `golang:1.25.7` when local CGO toolchain is unavailable.
 
-## Running a Single Test (Important)
+## Code change policy
 
-### Single test by exact name
-```bash
-go test -count=1 -run '^TestName$' ./path/to/package
-```
+- Keep public API backward-compatible unless task explicitly requires breaking changes.
+- Keep functions nil-safe at module boundaries where contexts/pointers may be nil.
+- Prefer deterministic behavior and explicit validation errors.
+- Do not add new external dependencies unless strictly required.
+- If exported behavior changes, update relevant README files.
 
-### Single subtest
-```bash
-go test -count=1 -run '^TestParent$/^subtest name$' ./path/to/package
-```
+## CI/CD files
 
-### Single unit-tagged test
-```bash
-go test -count=1 -tags=unit -run '^TestName$' ./path/to/package
-```
+GitHub Actions workflows are stored in `.github/workflows`:
 
-### Single `unit+testhooks` test (Postgres hooks)
-```bash
-go test -count=1 -tags="unit testhooks" -run '^TestOpen_Success$' ./data/postgres
-```
+- `ci.yml`
+- `integration-race.yml`
+- `release.yml`
 
-### Single integration test
-```bash
-go test -count=1 -tags=integration -run '^TestOpen_Integration$' ./data/postgres
-```
-- Ensure Postgres container is up before DB integration tests.
-
-### Unix-only tests
-- Files with `//go:build unix` run only on Unix-like systems.
-
-## Build Tag Matrix
-- `unit`: opt-in unit tests
-- `testhooks`: enables testing hooks (non-production support)
-- `integration`: integration tests with external/runtime behavior
-- `unix`: OS-specific behavior
-
-## Code Style Guidelines
-
-### Imports
-- Use standard grouping: stdlib, blank line, external/internal modules.
-- Keep imports `gofmt` sorted.
-- Alias imports only for collisions or clarity.
-- Avoid dot imports.
-
-### Formatting
-- Follow `gofmt` strictly.
-- Prefer small focused functions and early returns.
-- Avoid deep nesting when guard clauses are clearer.
-- Add comments only for non-obvious invariants/logic.
-
-### Types and API design
-- Prefer explicit config structs (`Config`, `Options`) for constructors.
-- Use functional options where package already follows this style.
-- Use `any` (not `interface{}`) in new code.
-- Preserve exported API signatures unless change is requested.
-
-### Naming
-- Package names: lowercase, short, no underscores.
-- Exported: `PascalCase`; unexported: `camelCase`.
-- Sentinel errors: `Err...`.
-- Constants should be domain-descriptive.
-- Tests: `TestFeature_Scenario` when practical.
-
-### Error handling
-- Return errors; do not panic in normal runtime paths.
-- Panic is acceptable only in explicit `Must*` helpers or invalid required config.
-- Wrap root errors with context via `%w`.
-- Prefer `errors.Is` / `errors.As` over string matching.
-- Reuse `errors` package adapters (`ToGRPC`, `ToHTTP`, etc.).
-
-### Context, timeouts, concurrency
-- Pass `context.Context` as the first arg for I/O/long-running ops.
-- Use `context.WithTimeout` around external calls and health checks.
-- Always call `cancel()` for derived contexts.
-- Protect shared mutable state with `sync` / `atomic`.
-- Avoid goroutine leaks; stop timers where needed.
-
-### Security and logging
-- Never log secrets, tokens, OTPs, passwords, private keys, or raw cert/key material.
-- Follow `logutil` redaction/sanitization patterns.
-- Preserve strict TLS defaults and mTLS/PoP/replay checks in auth flows.
-
-## Testing Guidelines
-- Prefer table-driven tests for behavior matrices.
-- Use `t.Run` for subcases.
-- Use `t.Parallel()` where tests are isolated.
-- Match local assertion style (`testing`, `assert`, `require`).
-- If tests mutate globals/hooks, restore state in `t.Cleanup`.
-
-## Agent Workflow
-1. Read target package and nearby tests first.
-2. Implement the smallest viable change.
-3. Run narrow tests first (single test / package).
-4. Run broader checks relevant to modified surface.
-5. Avoid unrelated opportunistic refactors.
+Any change to build/test process should update both this file and workflow definitions.

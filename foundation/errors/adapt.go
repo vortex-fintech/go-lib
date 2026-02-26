@@ -1,18 +1,37 @@
 package errors
 
 import (
+	"context"
 	"errors"
 
 	"google.golang.org/grpc/codes"
 )
 
-// ToErrorResponse — унифицирует любую ошибку до ErrorResponse (без привязки к транспорту).
-// Поддерживает:
-// - ErrorResponse (прямой passthrough)
+// ToErrorResponse converts any error into ErrorResponse (transport-agnostic).
+// Supported inputs:
+// - ErrorResponse / *ErrorResponse (direct passthrough)
+// - context.Canceled / context.DeadlineExceeded
 // - InvariantError (DomainInvariant/StateInvariant/TransitionInvariant)
 func ToErrorResponse(err error) ErrorResponse {
+	if err == nil {
+		return Internal().WithReason("unexpected_error")
+	}
+
+	if errors.Is(err, context.Canceled) {
+		return Canceled()
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return DeadlineExceeded()
+	}
+
 	if e, ok := err.(ErrorResponse); ok {
 		return e
+	}
+
+	var ep *ErrorResponse
+	if errors.As(err, &ep) && ep != nil {
+		return *ep
 	}
 
 	var ie InvariantError
@@ -40,7 +59,7 @@ func ToErrorResponse(err error) ErrorResponse {
 	}
 }
 
-// Хелперы, если нужно точно.
+// Convenience helpers.
 func ToValidation(field, reason string) ErrorResponse {
 	return ValidationFields(map[string]string{field: reason})
 }

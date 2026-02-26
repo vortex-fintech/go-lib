@@ -1,6 +1,6 @@
 //go:build unit
 
-package graceful
+package prommetrics
 
 import (
 	"testing"
@@ -12,7 +12,10 @@ import (
 
 func TestPromMetrics_CountersAndHistogram(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	pm := NewPromMetrics(reg, "vortex", "graceful")
+	pm, err := New(reg, "vortex", "shutdown")
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
 
 	pm.IncStopTotal("success")
 	pm.IncStopTotal("force")
@@ -48,7 +51,7 @@ func TestPromMetrics_CountersAndHistogram(t *testing.T) {
 
 	var found bool
 	for _, mf := range mfs {
-		if mf.GetName() == "vortex_graceful_graceful_duration_seconds" {
+		if mf.GetName() == "vortex_shutdown_graceful_duration_seconds" {
 			found = true
 			if len(mf.Metric) == 0 || mf.Metric[0].Histogram == nil || mf.Metric[0].Histogram.GetSampleCount() == 0 {
 				t.Fatalf("histogram exists but sample count is zero")
@@ -57,6 +60,31 @@ func TestPromMetrics_CountersAndHistogram(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("histogram vortex_graceful_graceful_duration_seconds not found")
+		t.Fatalf("histogram vortex_shutdown_graceful_duration_seconds not found")
+	}
+}
+
+func TestPromMetrics_NilRegistry(t *testing.T) {
+	_, err := New(nil, "vortex", "shutdown")
+	if err == nil {
+		t.Fatal("expected error for nil registry")
+	}
+}
+
+func TestPromMetrics_DoubleRegister(t *testing.T) {
+	reg := prometheus.NewRegistry()
+
+	pm1, err := New(reg, "vortex", "shutdown")
+	if err != nil {
+		t.Fatalf("first New() error: %v", err)
+	}
+
+	pm2, err := New(reg, "vortex", "shutdown")
+	if err != nil {
+		t.Fatalf("second New() should succeed with AlreadyRegistered, got: %v", err)
+	}
+
+	if pm1 != pm2 {
+		t.Log("Note: different instances but metrics registered once")
 	}
 }

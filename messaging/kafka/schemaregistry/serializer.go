@@ -8,6 +8,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/sr"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 var (
@@ -51,7 +52,7 @@ func (s *ProtoSerializer) Serialize(subject string, message proto.Message) ([]by
 
 	if cachedRaw, ok := s.cache.Load(subject); ok {
 		schemaID := cachedRaw.(subjectSchemaCache).id
-		return createWireFormat(data, schemaID, []int{0}), schemaID, nil
+		return createWireFormat(data, schemaID, protobufMessageIndexPath(message)), schemaID, nil
 	}
 
 	return nil, 0, ErrSchemaNotCached
@@ -80,7 +81,7 @@ func (s *ProtoSerializer) SerializeWithSchemaRefs(subject, schema string, refs [
 	if cachedRaw, ok := s.cache.Load(subject); ok {
 		cached := cachedRaw.(subjectSchemaCache)
 		if cached.schema == schema && cached.refsKey == refsKey {
-			return createWireFormat(data, cached.id, []int{0}), cached.id, nil
+			return createWireFormat(data, cached.id, protobufMessageIndexPath(message)), cached.id, nil
 		}
 	}
 
@@ -94,7 +95,7 @@ func (s *ProtoSerializer) SerializeWithSchemaRefs(subject, schema string, refs [
 	}
 
 	s.cache.Store(subject, subjectSchemaCache{id: schemaID, schema: schema, refsKey: refsKey})
-	return createWireFormat(data, schemaID, []int{0}), schemaID, nil
+	return createWireFormat(data, schemaID, protobufMessageIndexPath(message)), schemaID, nil
 }
 
 func referencesCacheKey(refs []SchemaReference) string {
@@ -117,4 +118,25 @@ func referencesCacheKey(refs []SchemaReference) string {
 func createWireFormat(data []byte, schemaID int, messageIndex []int) []byte {
 	buf, _ := confluentHeader.AppendEncode(nil, schemaID, messageIndex)
 	return append(buf, data...)
+}
+
+func protobufMessageIndexPath(message proto.Message) []int {
+	desc := message.ProtoReflect().Descriptor()
+	path := []int{desc.Index()}
+
+	for parent := desc.Parent(); parent != nil; {
+		messageParent, ok := parent.(protoreflect.MessageDescriptor)
+		if !ok {
+			break
+		}
+		desc = messageParent
+		path = append(path, desc.Index())
+		parent = desc.Parent()
+	}
+
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+	}
+
+	return path
 }

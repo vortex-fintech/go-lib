@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// InvariantKind — тип доменного инварианта.
+// InvariantKind classifies domain invariant failures.
 type InvariantKind string
 
 const (
@@ -14,7 +14,7 @@ const (
 	KindTransition InvariantKind = "transition"
 )
 
-// InvariantError — унифицированный тип для всех доменных ошибок (field, state, transition).
+// InvariantError is a unified type for field/state/transition invariant failures.
 type InvariantError struct {
 	Kind   InvariantKind
 	Base   error
@@ -54,30 +54,23 @@ func (e InvariantError) Error() string {
 	}
 }
 
-// Unwrap поддерживает errors.Is / errors.As
+// Unwrap enables errors.Is / errors.As.
 func (e InvariantError) Unwrap() error {
 	return e.Base
 }
 
-// DomainInvariant создаёт ошибку field-level инварианта.
-// Пример: "person.email: invalid_format"
 func DomainInvariant(field, reason string) error {
 	return InvariantError{Kind: KindDomain, Field: field, Reason: reason}
 }
 
-// StateInvariant создаёт ошибку состояния.
-// Пример: "state: invalid state: updatedAt before createdAt"
 func StateInvariant(base error, field, reason string) error {
 	return InvariantError{Kind: KindState, Base: base, Field: field, Reason: reason}
 }
 
-// TransitionInvariant создаёт ошибку перехода.
-// Пример: "transition: invalid transition: cannot verify from PENDING"
 func TransitionInvariant(base error, field, reason string) error {
 	return InvariantError{Kind: KindTransition, Base: base, Field: field, Reason: reason}
 }
 
-// IsInvariant проверяет является ли ошибка InvariantError.
 func IsInvariant(err error) bool {
 	var ie InvariantError
 	return errors.As(err, &ie)

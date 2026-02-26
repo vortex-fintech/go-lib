@@ -2,8 +2,14 @@ package franzgo
 
 import (
 	"context"
+	"errors"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
+)
+
+var (
+	ErrProducerClientNil = errors.New("producer client is nil")
+	ErrProducerRecordNil = errors.New("producer record is nil")
 )
 
 type Producer struct {
@@ -22,6 +28,10 @@ func NewProducer(client *Client, topic string) *Producer {
 }
 
 func (p *Producer) Produce(ctx context.Context, key, value []byte) error {
+	if p == nil || p.client == nil || p.client.Client == nil {
+		return ErrProducerClientNil
+	}
+
 	record := kgo.Record{
 		Topic: p.topic,
 		Key:   key,
@@ -31,6 +41,10 @@ func (p *Producer) Produce(ctx context.Context, key, value []byte) error {
 }
 
 func (p *Producer) ProduceWithHeaders(ctx context.Context, key, value []byte, headers []kgo.RecordHeader) error {
+	if p == nil || p.client == nil || p.client.Client == nil {
+		return ErrProducerClientNil
+	}
+
 	record := kgo.Record{
 		Topic:   p.topic,
 		Key:     key,
@@ -41,7 +55,27 @@ func (p *Producer) ProduceWithHeaders(ctx context.Context, key, value []byte, he
 }
 
 func (p *Producer) ProduceBatch(ctx context.Context, records []*kgo.Record) error {
-	return p.client.ProduceSync(ctx, records...).FirstErr()
+	if p == nil || p.client == nil || p.client.Client == nil {
+		return ErrProducerClientNil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	batch := make([]*kgo.Record, 0, len(records))
+	for _, record := range records {
+		if record == nil {
+			return ErrProducerRecordNil
+		}
+
+		copyRecord := *record
+		if copyRecord.Topic == "" {
+			copyRecord.Topic = p.topic
+		}
+		batch = append(batch, &copyRecord)
+	}
+
+	return p.client.ProduceSync(ctx, batch...).FirstErr()
 }
 
 func (p *Producer) Topic() string {

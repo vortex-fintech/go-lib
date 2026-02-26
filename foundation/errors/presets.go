@@ -2,7 +2,7 @@ package errors
 
 import "google.golang.org/grpc/codes"
 
-// Фабричные функции (неизменяемые пресеты).
+// Preset factories (immutable templates).
 func Unknown() ErrorResponse {
 	return New("Unknown error occurred", codes.Unknown, nil).WithReason("unknown")
 }
@@ -46,8 +46,11 @@ func DataLoss() ErrorResponse {
 func Unauthenticated() ErrorResponse {
 	return New("Unauthenticated", codes.Unauthenticated, nil).WithReason("unauthenticated")
 }
+func Canceled() ErrorResponse {
+	return New("Request canceled", codes.Canceled, nil).WithReason("canceled")
+}
 
-// Быстрые конструкторы частых кейсов
+// Fast constructors for common cases.
 func ValidationFields(fields map[string]string) ErrorResponse {
 	return InvalidArgument().WithReason("validation_failed").WithDetails(fields).WithViolations(ViolationsFromMap(fields))
 }

@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// Server interface represents a server that can be managed by Manager.
 type Server interface {
 	Serve(ctx context.Context) error
 	GracefulStopWithTimeout(ctx context.Context) error
@@ -24,6 +25,8 @@ type Server interface {
 	Name() string
 }
 
+// Metrics interface for collecting shutdown statistics.
+// Implement this interface to integrate with your metrics system (e.g., Prometheus).
 type Metrics interface {
 	IncStopTotal(result string)
 	ObserveGracefulDuration(d time.Duration)
@@ -31,14 +34,28 @@ type Metrics interface {
 	IncServerStopResult(name, result string)
 }
 
+// Config for Manager.
 type Config struct {
+	// ShutdownTimeout is the maximum time to wait for graceful shutdown.
+	// If 0, servers are force-stopped immediately.
 	ShutdownTimeout time.Duration
-	HandleSignals   bool
-	IsNormalError   func(error) bool
-	Logger          func(level, msg string, kv ...any)
-	Metrics         Metrics
+
+	// HandleSignals enables automatic handling of SIGINT and SIGTERM.
+	HandleSignals bool
+
+	// IsNormalError determines if an error from Serve() is expected during shutdown.
+	// Default: DefaultIsNormalErr.
+	IsNormalError func(error) bool
+
+	// Logger is called for significant events. Default: log.Printf.
+	Logger func(level, msg string, kv ...any)
+
+	// Metrics collects shutdown statistics.
+	Metrics Metrics
 }
 
+// Manager handles graceful shutdown of multiple servers.
+// It coordinates Serve(), GracefulStopWithTimeout(), and ForceStop() calls.
 type Manager struct {
 	cfg     Config
 	mu      sync.Mutex
@@ -46,6 +63,8 @@ type Manager struct {
 	stopped bool
 }
 
+// New creates a new Manager with the given configuration.
+// Nil Logger and IsNormalError are replaced with defaults.
 func New(cfg Config) *Manager {
 	if cfg.Logger == nil {
 		cfg.Logger = func(level, msg string, kv ...any) { log.Printf("[%s] %s %v", level, msg, kv) }
@@ -56,8 +75,19 @@ func New(cfg Config) *Manager {
 	return &Manager{cfg: cfg}
 }
 
-func (m *Manager) Add(s Server) { m.servers = append(m.servers, s) }
+// Add registers a server to be managed. Nil servers are ignored.
+func (m *Manager) Add(s Server) {
+	if s == nil {
+		return
+	}
+	m.servers = append(m.servers, s)
+}
 
+// Run starts all registered servers and blocks until shutdown.
+// It returns any non-normal error from a server, or nil on clean shutdown.
+//
+// If HandleSignals is true, SIGINT and SIGTERM trigger graceful shutdown.
+// After ctx is cancelled or a server fails, Stop() is called to shut down all servers.
 func (m *Manager) Run(ctx context.Context) error {
 	if m.cfg.HandleSignals {
 		var stop context.CancelFunc
@@ -122,6 +152,12 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
+// Stop initiates graceful shutdown of all servers.
+// It is safe to call Stop multiple times; subsequent calls are no-ops.
+//
+// Each server is given ShutdownTimeout to stop gracefully.
+// If a server doesn't stop in time, ForceStop is called.
+// Metrics are updated with success/force results.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	if m.stopped {
@@ -158,9 +194,29 @@ func (m *Manager) Stop() {
 			}
 			defer cancel()
 
-			// Пытаемся graceful в рамках локального контекста
-			if err := srv.GracefulStopWithTimeout(srvCtx); err != nil {
-				m.cfg.Logger("WARN", "graceful stop error; forcing", "name", name, "err", err)
+			graceDone := make(chan error, 1)
+			go func() { graceDone <- srv.GracefulStopWithTimeout(srvCtx) }()
+
+			select {
+			case err := <-graceDone:
+				if err != nil {
+					m.cfg.Logger("WARN", "graceful stop error; forcing", "name", name, "err", err)
+					srv.ForceStop()
+					forcedAny.Store(true)
+					if m.cfg.Metrics != nil {
+						m.cfg.Metrics.IncServerStopResult(name, "force")
+					}
+					return nil
+				}
+
+				m.cfg.Logger("INFO", "graceful stop done", "name", name)
+				if m.cfg.Metrics != nil {
+					m.cfg.Metrics.IncServerStopResult(name, "success")
+				}
+				return nil
+
+			case <-srvCtx.Done():
+				m.cfg.Logger("WARN", "graceful stop timeout; forcing", "name", name, "err", srvCtx.Err())
 				srv.ForceStop()
 				forcedAny.Store(true)
 				if m.cfg.Metrics != nil {
@@ -168,14 +224,6 @@ func (m *Manager) Stop() {
 				}
 				return nil
 			}
-
-			// Если дошли сюда — сервер сам закрылся в свой дедлайн: это success,
-			// даже если глобальный уже истёк к этому моменту.
-			m.cfg.Logger("INFO", "graceful stop done", "name", name)
-			if m.cfg.Metrics != nil {
-				m.cfg.Metrics.IncServerStopResult(name, "success")
-			}
-			return nil
 		})
 	}
 
@@ -192,6 +240,13 @@ func (m *Manager) Stop() {
 	}
 }
 
+// DefaultIsNormalErr reports whether an error is expected during normal shutdown.
+// It recognizes:
+//   - http.ErrServerClosed
+//   - grpc.ErrServerStopped
+//   - "use of closed network connection"
+//   - "the server has been stopped"
+//   - gRPC TLS handshake errors during shutdown
 func DefaultIsNormalErr(err error) bool {
 	if err == nil {
 		return true

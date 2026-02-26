@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/url"
 	"strings"
@@ -11,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// test hooks (подменяемы в unit-тестах)
+// Test hooks (replaceable in unit tests).
 var (
 	newPool  = pgxpool.NewWithConfig
 	pingPool = func(ctx context.Context, p *pgxpool.Pool) error { return p.Ping(ctx) }
@@ -21,19 +20,24 @@ type Client struct {
 	Pool *pgxpool.Pool
 }
 
-// Открыть по высокоуровневому Config (URL + pool options).
+// Open creates a client from high-level Config (URL + pool options).
 func Open(ctx context.Context, cfg Config) (*Client, error) {
-	dsn := buildURL(cfg)
-	if strings.TrimSpace(dsn) == "" {
-		return nil, fmt.Errorf("postgres: empty URL")
+	if ctx == nil {
+		ctx = context.Background()
 	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	dsn := buildURL(cfg)
 
 	pcfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
 
-	// Параметры пула
+	// Pool options
 	if cfg.MaxConns > 0 {
 		pcfg.MaxConns = cfg.MaxConns
 	}
@@ -48,9 +52,9 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 		pcfg.HealthCheckPeriod = cfg.HealthCheckPeriod
 	}
 
-	// Полезные дефолты: видимость в pg_stat_activity и единая TZ
+	// Useful defaults: pg_stat_activity visibility and unified timezone.
 	if pcfg.ConnConfig != nil {
-		// v5: runtime params лежат в ConnConfig.Config.RuntimeParams
+		// v5: runtime params are stored in ConnConfig.Config.RuntimeParams.
 		if pcfg.ConnConfig.Config.RuntimeParams == nil {
 			pcfg.ConnConfig.Config.RuntimeParams = map[string]string{}
 		}
@@ -67,7 +71,7 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 
-	// Быстрый health-check
+	// Fast health check
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := pingPool(pingCtx, pool); err != nil {
@@ -80,18 +84,23 @@ func Open(ctx context.Context, cfg Config) (*Client, error) {
 	return &Client{Pool: pool}, nil
 }
 
-// Открыть по структурному DBConfig (host/port/user/...).
-// Собирает URL внутри и переносит пул-настройки из DBConfig.
+// OpenWithDBConfig creates a client from structured DBConfig (host/port/user/...)
+// and maps pool options to Config.
 func OpenWithDBConfig(ctx context.Context, dbCfg DBConfig) (*Client, error) {
+	if err := dbCfg.validate(); err != nil {
+		return nil, err
+	}
+
 	dsn := buildURLFromDB(dbCfg)
 	return Open(ctx, Config{
 		URL: dsn,
-		// Маппим настройки пула
+		// Map pool options.
+		// DBConfig.MaxIdleConns is used as a minimum warm pool size (MinConns).
 		MaxConns:          int32(dbCfg.MaxOpenConns),
 		MinConns:          int32(dbCfg.MaxIdleConns),
 		MaxConnLifetime:   dbCfg.ConnMaxLifetime,
 		MaxConnIdleTime:   dbCfg.ConnMaxIdleTime,
-		HealthCheckPeriod: 0, // оставим по умолчанию
+		HealthCheckPeriod: 0, // keep default
 	})
 }
 
@@ -103,7 +112,7 @@ func (c *Client) Close() {
 
 // --- helpers ---
 
-// buildURL — применяет cfg.Params к cfg.URL (если заданы).
+// buildURL applies cfg.Params to cfg.URL when params are provided.
 func buildURL(cfg Config) string {
 	base := strings.TrimSpace(cfg.URL)
 	if base == "" {
@@ -126,8 +135,8 @@ func buildURL(cfg Config) string {
 	return u.String()
 }
 
-// buildURLFromDB — собирает postgres DSN из структурного DBConfig.
-// IPv6-безопасен благодаря net.JoinHostPort.
+// buildURLFromDB builds postgres DSN from structured DBConfig.
+// It is IPv6-safe thanks to net.JoinHostPort.
 func buildURLFromDB(c DBConfig) string {
 	u := &url.URL{
 		Scheme: "postgres",

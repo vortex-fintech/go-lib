@@ -1,67 +1,105 @@
-APP_NAME := go-lib
-PKG := ./...
-MODULES := foundation security transport data runtime
-DC := docker compose -f data/postgres/docker-compose.test.yml
-CONTAINER := go-lib-test-postgres
-
-# Используем bash (Git Bash / WSL)
 SHELL := bash
 .SHELLFLAGS := -lc
 
-.PHONY: all tidy build test test-integration test-integration-core test-all test-race cover up wait-db down
+MODULES := foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry
+POSTGRES_DC := docker compose -f data/postgres/docker-compose.test.yml
+REDIS_DC := docker compose -f data/redis/docker-compose.test.yml
+REDPANDA_NAME := redpanda-test
+REDPANDA_IMAGE := docker.redpanda.com/redpandadata/redpanda:v25.1.5
+KAFKA_BROKER ?= localhost:9092
 
-# === Базовые ===
+.PHONY: all tidy build test test-unit vet test-integration-core test-integration test-race cover test-all up wait-redpanda down
+
 all: tidy build
 
 tidy:
-	@set -e; \
+	@set -euo pipefail; \
 	for m in $(MODULES); do \
-		(cd $$m && go mod tidy); \
+		(cd "$$m" && go mod tidy); \
 	done
 
 build:
-	go build -v $(PKG)
+	@set -euo pipefail; \
+	for m in $(MODULES); do \
+		(cd "$$m" && go build ./...); \
+	done
 
-# === Тесты ===
-# Юнит-тесты (включая testhooks)
 test:
-	go test -count=1 -tags=unit -v $(PKG)
-	go test -count=1 -tags="unit testhooks" -v ./data/postgres
+	@set -euo pipefail; \
+	for m in $(MODULES); do \
+		(cd "$$m" && go test -count=1 ./...); \
+	done
 
-# Интеграция с Postgres
-test-integration: up wait-db
-	@set -e; \
-	go test -count=1 -tags=integration -v $(PKG); \
-	status=$$?; \
-	$(DC) down -v; \
-	exit $$status
+test-unit:
+	(cd foundation && go test -count=1 -tags unit ./...)
+	(cd runtime && go test -count=1 -tags unit ./...)
+	(cd data && go test -count=1 -tags "unit testhooks" ./postgres)
 
-# Интеграция без инфраструктуры
+vet:
+	@set -euo pipefail; \
+	for m in $(MODULES); do \
+		(cd "$$m" && go vet ./...); \
+	done
+
 test-integration-core:
-	go test -count=1 -tags=integration -v $(PKG)
+	(cd data && go test -count=1 -tags integration ./...)
+	(cd runtime && go test -count=1 -tags integration ./...)
+	(cd messaging/kafka/franzgo && KAFKA_BROKER=$(KAFKA_BROKER) go test -count=1 -tags integration ./...)
 
-# Все тесты по порядку
-test-all:
-	$(MAKE) test
-	$(MAKE) test-integration
+test-integration:
+	@set -euo pipefail; \
+	trap '$(MAKE) --no-print-directory down >/dev/null 2>&1 || true' EXIT; \
+	$(MAKE) --no-print-directory up; \
+	$(MAKE) --no-print-directory test-integration-core
 
-# С гонщиком (race)
 test-race:
-	go test -race -count=1 -tags=unit $(PKG)
-	go test -race -count=1 -tags="unit testhooks" -v ./data/postgres
+	docker run --rm -v "$$(pwd):/work" golang:1.25.7 sh -c 'set -e; \
+		cd /work/foundation && go mod download && go test -race -count=1 ./...; \
+		cd /work/security && go mod download && go test -race -count=1 ./...; \
+		cd /work/transport && go mod download && go test -race -count=1 ./...; \
+		cd /work/data && go mod download && go test -race -count=1 ./...; \
+		cd /work/runtime && go mod download && go test -race -count=1 ./...; \
+		cd /work/messaging/kafka/franzgo && go mod download && go test -race -count=1 ./...; \
+		cd /work/messaging/kafka/schemaregistry && go mod download && go test -race -count=1 ./...'
 
-# Покрытие
 cover:
-	go test -count=1 -coverprofile=coverage.out -tags=unit $(PKG)
-	go test -count=1 -coverprofile=coverage.dbpgx.out -tags="unit testhooks" ./data/postgres
-	go tool cover -html=coverage.out -o coverage.html
-	@echo "Открой coverage.html в браузере."
+	@set -euo pipefail; \
+	root="$$(pwd)"; \
+	rm -rf "$$root/coverage"; \
+	mkdir -p "$$root/coverage"; \
+	for m in $(MODULES); do \
+		out="$${m//\//_}"; \
+		(cd "$$m" && go test -count=1 -coverprofile="$$root/coverage/$${out}.out" ./...); \
+	done
 
-# === Инфраструктура ===
+test-all: test test-unit vet test-integration test-race
+
 up:
-	$(DC) up -d --wait --wait-timeout 60
+	@set -euo pipefail; \
+	$(POSTGRES_DC) up -d --wait --wait-timeout 90; \
+	$(REDIS_DC) up -d --wait --wait-timeout 90; \
+	docker rm -f $(REDPANDA_NAME) >/dev/null 2>&1 || true; \
+	docker run -d --name $(REDPANDA_NAME) -p 9092:9092 -p 9644:9644 \
+		$(REDPANDA_IMAGE) \
+		redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M \
+		--node-id 0 --check=false \
+		--kafka-addr PLAINTEXT://0.0.0.0:9092 \
+		--advertise-kafka-addr PLAINTEXT://localhost:9092 >/dev/null; \
+	$(MAKE) --no-print-directory wait-redpanda
 
-wait-db: ; @echo "Postgres is up (compose --wait handled it)."
+wait-redpanda:
+	@set -euo pipefail; \
+	for i in $$(seq 1 30); do \
+		if docker exec $(REDPANDA_NAME) rpk cluster info >/dev/null 2>&1; then \
+			exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	docker exec $(REDPANDA_NAME) rpk cluster info || true; \
+	exit 1
 
 down:
-	$(DC) down -v
+	@set -euo pipefail; \
+	$(POSTGRES_DC) down -v || true; \
+	$(REDIS_DC) down -v || true; \
+	docker rm -f $(REDPANDA_NAME) >/dev/null 2>&1 || true

@@ -1,39 +1,44 @@
 package dial
 
 import (
-	"time"
+	"context"
 
-	"github.com/vortex-fintech/go-lib/transport/grpc/creds" // твой пакет creds
 	"github.com/vortex-fintech/go-lib/security/mtls"
+	"github.com/vortex-fintech/go-lib/transport/grpc/creds"
 
 	"google.golang.org/grpc"
 	gbackoff "google.golang.org/grpc/backoff"
 )
 
-// Options — минимальный набор для клиента.
 type Options struct {
 	MTLS mtls.Config
 
-	// gRPC conn-backoff (не про retry RPC, а про реконнект канала).
-	Backoff        gbackoff.Config
-	InitialWindow  int32
-	InitialConnWin int32
+	Backoff       gbackoff.Config
+	InitialWindow int32
+	InitialConn   int32
 
-	// Если true — grpc.Dial будет блокирующим до установления коннекта.
-	Block bool
+	MaxRecvMsgSize int
+	MaxSendMsgSize int
 }
 
 func DefaultBackoff() gbackoff.Config {
 	return gbackoff.Config{
-		BaseDelay:  100 * time.Millisecond,
+		BaseDelay:  100e6,
 		Multiplier: 1.6,
 		Jitter:     0.2,
-		MaxDelay:   2 * time.Second,
+		MaxDelay:   2e9,
 	}
 }
 
-func Dial(target string, opt Options) (*grpc.ClientConn, error) {
+func NewClient(ctx context.Context, target string, opt Options) (*grpc.ClientConn, error) {
 	tlsConf, _, err := mtls.TLSConfigClient(opt.MTLS)
+	if err != nil {
+		return nil, err
+	}
+
+	cred, err := creds.ClientTransportCredentials(tlsConf, creds.ClientOptions{
+		SkipRootCAValidation: true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -43,23 +48,36 @@ func Dial(target string, opt Options) (*grpc.ClientConn, error) {
 		bc = DefaultBackoff()
 	}
 
+	maxRecv := opt.MaxRecvMsgSize
+	if maxRecv == 0 {
+		maxRecv = 16 << 20
+	}
+	maxSend := opt.MaxSendMsgSize
+	if maxSend == 0 {
+		maxSend = 16 << 20
+	}
+
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(creds.ClientTransportCredentials(tlsConf)),
-		grpc.WithConnectParams(grpc.ConnectParams{Backoff: bc, MinConnectTimeout: 3 * time.Second}),
+		grpc.WithTransportCredentials(cred),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           bc,
+			MinConnectTimeout: 3e9,
+		}),
 		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(16<<20),
-			grpc.MaxCallSendMsgSize(16<<20),
+			grpc.MaxCallRecvMsgSize(maxRecv),
+			grpc.MaxCallSendMsgSize(maxSend),
 		),
 	}
 	if opt.InitialWindow > 0 {
 		opts = append(opts, grpc.WithInitialWindowSize(opt.InitialWindow))
 	}
-	if opt.InitialConnWin > 0 {
-		opts = append(opts, grpc.WithInitialConnWindowSize(opt.InitialConnWin))
-	}
-	if opt.Block {
-		opts = append(opts, grpc.WithBlock())
+	if opt.InitialConn > 0 {
+		opts = append(opts, grpc.WithInitialConnWindowSize(opt.InitialConn))
 	}
 
-	return grpc.Dial(target, opts...)
+	return grpc.NewClient(target, opts...)
+}
+
+func Dial(target string, opt Options) (*grpc.ClientConn, error) {
+	return NewClient(context.Background(), target, opt)
 }

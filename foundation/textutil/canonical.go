@@ -13,6 +13,7 @@ type CanonicalPolicy struct {
 	MaxRunes      int
 	AllowEmpty    bool
 	AllowFormatCF bool
+	AllowNewlines bool
 }
 
 func CanonicalizeStrict(s string, p CanonicalPolicy) (string, error) {
@@ -20,16 +21,9 @@ func CanonicalizeStrict(s string, p CanonicalPolicy) (string, error) {
 		return "", ErrInvalidText
 	}
 
-	const bytesPerRuneCap = 8
-	if maxB := p.MaxRunes * bytesPerRuneCap; maxB > 0 && len(s) > maxB {
-		return "", ErrInvalidText
-	}
-
-	s = strings.TrimSpace(s)
-	if s == "" {
-		if p.AllowEmpty {
-			return "", nil
-		}
+	const maxUTF8BytesPerRune = 4
+	q, r := len(s)/maxUTF8BytesPerRune, len(s)%maxUTF8BytesPerRune
+	if q > p.MaxRunes || (q == p.MaxRunes && r > 0) {
 		return "", ErrInvalidText
 	}
 
@@ -50,10 +44,20 @@ func CanonicalizeStrict(s string, p CanonicalPolicy) (string, error) {
 		}
 		i += size
 
-		switch r {
-		case '\n', '\r', '\u0085', '\u2028', '\u2029':
-			return "", ErrInvalidText
+		isNewline := r == '\n' || r == '\r' || r == '\u0085' || r == '\u2028' || r == '\u2029'
+		if isNewline {
+			if !p.AllowNewlines {
+				return "", ErrInvalidText
+			}
+			b.WriteRune('\n')
+			outRunes++
+			if outRunes > p.MaxRunes {
+				return "", ErrInvalidText
+			}
+			prevSpace = false
+			continue
 		}
+
 		if unicode.IsControl(r) {
 			return "", ErrInvalidText
 		}
@@ -81,5 +85,13 @@ func CanonicalizeStrict(s string, p CanonicalPolicy) (string, error) {
 		}
 	}
 
-	return strings.TrimSpace(b.String()), nil
+	out := strings.TrimSpace(b.String())
+	if out == "" {
+		if p.AllowEmpty {
+			return "", nil
+		}
+		return "", ErrInvalidText
+	}
+
+	return out, nil
 }

@@ -2,6 +2,7 @@ package mtls
 
 import (
 	"crypto/tls"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,5 +83,50 @@ func TestReloader_Stop_Idempotent(t *testing.T) {
 
 	r := NewReloader(Config{}, func(*bundle) {})
 	r.Stop()
+	r.Stop()
+}
+
+func TestNewReloaderWithLogger_NilApply_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	r := NewReloaderWithLogger(Config{}, nil, nil)
+	if r == nil {
+		t.Fatalf("expected non-nil reloader")
+	}
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("unexpected panic: %v", rec)
+		}
+	}()
+
+	r.apply(nil)
+}
+
+func TestReloader_Start_NilTicker_LogsError(t *testing.T) {
+	t.Parallel()
+
+	errCh := make(chan error, 1)
+	r := NewReloaderWithLogger(Config{}, func(*bundle) {}, func(ev ReloadEvent) {
+		errCh <- ev.Err
+	})
+
+	r.Start(nil)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, errNilTicker) {
+			t.Fatalf("expected errNilTicker, got %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("expected nil ticker error to be logged")
+	}
+}
+
+func TestReloader_NilReceiver_NoPanic(t *testing.T) {
+	t.Parallel()
+
+	var r *Reloader
+	r.Start(nil)
 	r.Stop()
 }

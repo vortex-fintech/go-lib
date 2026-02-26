@@ -1,4 +1,3 @@
-// go-lib/authz/interceptor.go
 package authz
 
 import (
@@ -18,100 +17,114 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Policy — требования по скоупам.
 type Policy struct {
-	All []string // все обязательны
-	Any []string // хотя бы один обязателен
+	All []string
+	Any []string
 }
 
-// PolicyResolver — политика по полному имени метода.
 type PolicyResolver func(fullMethod string) Policy
 
-// SkipAuthFunc — пропустить аутентификацию для метода.
 type SkipAuthFunc func(fullMethod string) bool
 
 type Config struct {
 	Verifier libjwt.Verifier
 
-	// OBO-политика (ValidateOBO)
-	Audience       string                           // этот сервис, напр. "wallet" (обязателен)
-	Actor          string                           // кто обменял токен, напр. "api-gateway" (желателен)
-	AllowedAZP     []string                         // допустимые источники клиента (azp), опционально (если задано — azp обязателен)
-	Leeway         time.Duration                    // 30–60s
-	MaxTTL         time.Duration                    // <= 5m
-	RequireScopes  bool                             // требовать непустые scopes
-	SeenJTI        func(string) bool                // anti-replay (может быть nil)
-	RequirePoP     bool                             // требовать PoP (x5t#S256)
-	MTLSThumbprint func(ctx context.Context) string // вернуть x5t#S256 из peer TLS (может быть nil)
+	Audience       string
+	Actor          string
+	AllowedAZP     []string
+	Leeway         time.Duration
+	MaxTTL         time.Duration
+	RequireScopes  bool
+	SeenJTI        func(string) bool
+	RequirePoP     bool
+	MTLSThumbprint func(ctx context.Context) string
 
-	// Доп. авторизация на уровне метода
 	RequiredScopes []string
 	ResolvePolicy  PolicyResolver
 
-	// Анонимные методы
 	SkipAuth SkipAuthFunc
+}
+
+type AuthzResult struct {
+	Identity Identity
+	Claims   *libjwt.Claims
+}
+
+func Authorize(ctx context.Context, fullMethod string, cfg Config) (*AuthzResult, error) {
+	cfg = normalize(cfg)
+
+	if cfg.SkipAuth != nil && cfg.SkipAuth(fullMethod) {
+		return nil, nil
+	}
+
+	raw, err := bearerFromMD(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
+
+	cl, err := cfg.Verifier.Verify(ctx, raw)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "invalid token")
+	}
+
+	var thumb string
+	if cfg.MTLSThumbprint != nil {
+		thumb = cfg.MTLSThumbprint(ctx)
+	}
+	if cfg.RequirePoP && thumb == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing mTLS client certificate")
+	}
+
+	if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
+		WantAudience:   cfg.Audience,
+		WantActor:      cfg.Actor,
+		AllowedAZP:     cfg.AllowedAZP,
+		Leeway:         cfg.Leeway,
+		MaxTTL:         cfg.MaxTTL,
+		MTLSThumbprint: thumb,
+		SeenJTI:        cfg.SeenJTI,
+		RequireScopes:  cfg.RequireScopes,
+	}); err != nil {
+		switch err {
+		case libjwt.ErrExpired, libjwt.ErrIATInFuture:
+			return nil, status.Error(codes.Unauthenticated, err.Error())
+		default:
+			return nil, status.Error(codes.PermissionDenied, err.Error())
+		}
+	}
+
+	uid, err := uuid.Parse(cl.Subject)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, libjwt.ErrBadSubject.Error())
+	}
+
+	sc := cl.EffectiveScopes()
+
+	var p Policy
+	if cfg.ResolvePolicy != nil {
+		p = cfg.ResolvePolicy(fullMethod)
+	}
+	if !satisfies(sc, p, cfg.RequiredScopes) {
+		return nil, status.Error(codes.PermissionDenied, "insufficient scope")
+	}
+
+	return &AuthzResult{
+		Identity: Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID},
+		Claims:   cl,
+	}, nil
 }
 
 func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 	cfg = normalize(cfg)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
-			return handler(ctx, req)
-		}
-
-		raw, err := bearerFromMD(ctx)
+		result, err := Authorize(ctx, info.FullMethod, cfg)
 		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, err.Error())
+			return nil, err
 		}
-		cl, err := cfg.Verifier.Verify(ctx, raw)
-		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, "invalid token")
+		if result != nil {
+			ctx = WithIdentity(ctx, result.Identity)
+			ctx = WithClaims(ctx, result.Claims)
 		}
-
-		var thumb string
-		if cfg.MTLSThumbprint != nil {
-			thumb = cfg.MTLSThumbprint(ctx)
-		}
-		if cfg.RequirePoP && thumb == "" {
-			return nil, status.Error(codes.Unauthenticated, "missing mTLS client certificate")
-		}
-
-		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
-			WantAudience:   cfg.Audience,
-			WantActor:      cfg.Actor,
-			AllowedAZP:     cfg.AllowedAZP,
-			Leeway:         cfg.Leeway,
-			MaxTTL:         cfg.MaxTTL,
-			MTLSThumbprint: thumb,
-			SeenJTI:        cfg.SeenJTI,
-			RequireScopes:  cfg.RequireScopes,
-		}); err != nil {
-			switch err {
-			case libjwt.ErrExpired, libjwt.ErrIATInFuture:
-				return nil, status.Error(codes.Unauthenticated, err.Error())
-			default:
-				return nil, status.Error(codes.PermissionDenied, err.Error())
-			}
-		}
-
-		uid, err := uuid.Parse(cl.Subject)
-		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, libjwt.ErrBadSubject.Error())
-		}
-		sc := cl.EffectiveScopes()
-
-		var p Policy
-		if cfg.ResolvePolicy != nil {
-			p = cfg.ResolvePolicy(info.FullMethod)
-		}
-		if !satisfies(sc, p, cfg.RequiredScopes) {
-			return nil, status.Error(codes.PermissionDenied, "insufficient scope")
-		}
-
-		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID}
-		ctx = WithIdentity(ctx, id)
-		ctx = WithClaims(ctx, cl) // если где-то нужно читать wallet_id/azp/acr
-
 		return handler(ctx, req)
 	}
 }
@@ -119,63 +132,16 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
 	cfg = normalize(cfg)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if cfg.SkipAuth != nil && cfg.SkipAuth(info.FullMethod) {
-			return handler(srv, ss)
-		}
-
-		ctx := ss.Context()
-		raw, err := bearerFromMD(ctx)
+		result, err := Authorize(ss.Context(), info.FullMethod, cfg)
 		if err != nil {
-			return status.Error(codes.Unauthenticated, err.Error())
+			return err
 		}
-		cl, err := cfg.Verifier.Verify(ctx, raw)
-		if err != nil {
-			return status.Error(codes.Unauthenticated, "invalid token")
+		if result != nil {
+			ctx := WithClaims(WithIdentity(ss.Context(), result.Identity), result.Claims)
+			wrapped := &serverStream{ServerStream: ss, ctx: ctx}
+			return handler(srv, wrapped)
 		}
-
-		var thumb string
-		if cfg.MTLSThumbprint != nil {
-			thumb = cfg.MTLSThumbprint(ctx)
-		}
-		if cfg.RequirePoP && thumb == "" {
-			return status.Error(codes.Unauthenticated, "missing mTLS client certificate")
-		}
-
-		if err := libjwt.ValidateOBO(time.Now(), cl, libjwt.OBOValidateOptions{
-			WantAudience:   cfg.Audience,
-			WantActor:      cfg.Actor,
-			AllowedAZP:     cfg.AllowedAZP,
-			Leeway:         cfg.Leeway,
-			MaxTTL:         cfg.MaxTTL,
-			MTLSThumbprint: thumb,
-			SeenJTI:        cfg.SeenJTI,
-			RequireScopes:  cfg.RequireScopes,
-		}); err != nil {
-			switch err {
-			case libjwt.ErrExpired, libjwt.ErrIATInFuture:
-				return status.Error(codes.Unauthenticated, err.Error())
-			default:
-				return status.Error(codes.PermissionDenied, err.Error())
-			}
-		}
-
-		uid, err := uuid.Parse(cl.Subject)
-		if err != nil {
-			return status.Error(codes.Unauthenticated, libjwt.ErrBadSubject.Error())
-		}
-		sc := cl.EffectiveScopes()
-
-		var p Policy
-		if cfg.ResolvePolicy != nil {
-			p = cfg.ResolvePolicy(info.FullMethod)
-		}
-		if !satisfies(sc, p, cfg.RequiredScopes) {
-			return status.Error(codes.PermissionDenied, "insufficient scope")
-		}
-
-		id := Identity{UserID: uid, Scopes: sc, SID: cl.Sid, DeviceID: cl.DeviceID}
-		wrapped := &serverStream{ServerStream: ss, ctx: WithClaims(WithIdentity(ctx, id), cl)}
-		return handler(srv, wrapped)
+		return handler(srv, ss)
 	}
 }
 
@@ -218,8 +184,7 @@ func bearerFromMD(ctx context.Context) (string, error) {
 	return parts[1], nil
 }
 
-// mtlsThumbFromPeer — извлечь x5t#S256 из peer TLS.
-func mtlsThumbFromPeer(ctx context.Context) string {
+func MTLSThumbprintFromPeer(ctx context.Context) string {
 	pr, ok := peer.FromContext(ctx)
 	if !ok {
 		return ""
@@ -246,11 +211,7 @@ func normalize(cfg Config) Config {
 		cfg.MaxTTL = 5 * time.Minute
 	}
 	if cfg.MTLSThumbprint == nil {
-		cfg.MTLSThumbprint = mtlsThumbFromPeer
-	}
-	// Fail-safe: требуем PoP по умолчанию
-	if !cfg.RequirePoP {
-		cfg.RequirePoP = true
+		cfg.MTLSThumbprint = MTLSThumbprintFromPeer
 	}
 	return cfg
 }

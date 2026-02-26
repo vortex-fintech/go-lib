@@ -2,6 +2,8 @@ package domainutil
 
 import (
 	"errors"
+	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +16,9 @@ func TestIsUTC(t *testing.T) {
 	}
 	if IsUTC(time.Now().In(time.FixedZone("UTC+3", 3*60*60))) {
 		t.Fatalf("expected non-UTC offset to be rejected")
+	}
+	if IsUTC(time.Now().In(time.FixedZone("UTC0", 0))) {
+		t.Fatalf("expected non-time.UTC location to be rejected")
 	}
 }
 
@@ -102,6 +107,54 @@ func TestNextRevisionState(t *testing.T) {
 			t.Fatalf("expected UTC output")
 		}
 	})
+
+	t.Run("revision max saturates", func(t *testing.T) {
+		nextAt, nextRev := NextRevisionState(time.Now().UTC(), math.MaxInt64, time.Now().UTC())
+		if nextRev != math.MaxInt64 {
+			t.Fatalf("expected saturated revision %d, got %d", int64(math.MaxInt64), nextRev)
+		}
+		if !IsUTC(nextAt) {
+			t.Fatalf("expected UTC output")
+		}
+	})
+}
+
+func TestNextRevisionStateWithCeiling(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clamps client future timestamp", func(t *testing.T) {
+		updatedAt := time.Date(2026, 2, 8, 10, 0, 0, 0, time.UTC)
+		at := time.Date(2026, 2, 8, 13, 0, 0, 0, time.UTC)
+		ceiling := time.Date(2026, 2, 8, 11, 0, 0, 0, time.UTC)
+
+		nextAt, nextRev := NextRevisionStateWithCeiling(updatedAt, 7, at, ceiling)
+		if !nextAt.Equal(ceiling) {
+			t.Fatalf("expected ceiling clamp, got %v", nextAt)
+		}
+		if nextRev != 8 {
+			t.Fatalf("expected revision 8, got %d", nextRev)
+		}
+		if !IsUTC(nextAt) {
+			t.Fatalf("expected UTC output")
+		}
+	})
+
+	t.Run("keeps monotonic timestamp when updatedAt already above ceiling", func(t *testing.T) {
+		updatedAt := time.Date(2026, 2, 8, 13, 0, 0, 0, time.FixedZone("UTC+3", 3*60*60))
+		at := time.Date(2026, 2, 8, 8, 0, 0, 0, time.UTC)
+		ceiling := time.Date(2026, 2, 8, 9, 0, 0, 0, time.UTC)
+
+		nextAt, nextRev := NextRevisionStateWithCeiling(updatedAt, 10, at, ceiling)
+		if !nextAt.Equal(updatedAt.UTC()) {
+			t.Fatalf("expected updatedAt.UTC to preserve monotonicity, got %v", nextAt)
+		}
+		if nextRev != 11 {
+			t.Fatalf("expected revision 11, got %d", nextRev)
+		}
+		if !IsUTC(nextAt) {
+			t.Fatalf("expected UTC output")
+		}
+	})
 }
 
 func TestRequireRevision(t *testing.T) {
@@ -112,12 +165,52 @@ func TestRequireRevision(t *testing.T) {
 		if !errors.Is(err, ErrInvalidExpectedRevision) {
 			t.Fatalf("got=%v, want ErrInvalidExpectedRevision", err)
 		}
+
+		var typedErr *InvalidExpectedRevisionError
+		if !errors.As(err, &typedErr) {
+			t.Fatalf("expected InvalidExpectedRevisionError, got %T", err)
+		}
+		if typedErr.Expected != 0 {
+			t.Fatalf("expected Expected=0, got %d", typedErr.Expected)
+		}
+		if got := typedErr.Error(); !strings.Contains(got, "expected=0") {
+			t.Fatalf("expected error details in message, got %q", got)
+		}
+	})
+
+	t.Run("negative expected revision", func(t *testing.T) {
+		err := RequireRevision(5, -2)
+		if !errors.Is(err, ErrInvalidExpectedRevision) {
+			t.Fatalf("got=%v, want ErrInvalidExpectedRevision", err)
+		}
+
+		var typedErr *InvalidExpectedRevisionError
+		if !errors.As(err, &typedErr) {
+			t.Fatalf("expected InvalidExpectedRevisionError, got %T", err)
+		}
+		if typedErr.Expected != -2 {
+			t.Fatalf("expected Expected=-2, got %d", typedErr.Expected)
+		}
+		if got := typedErr.Error(); !strings.Contains(got, "expected=-2") {
+			t.Fatalf("expected error details in message, got %q", got)
+		}
 	})
 
 	t.Run("revision conflict", func(t *testing.T) {
 		err := RequireRevision(5, 4)
 		if !errors.Is(err, ErrRevisionConflict) {
 			t.Fatalf("got=%v, want ErrRevisionConflict", err)
+		}
+
+		var typedErr *RevisionConflictError
+		if !errors.As(err, &typedErr) {
+			t.Fatalf("expected RevisionConflictError, got %T", err)
+		}
+		if typedErr.Current != 5 || typedErr.Expected != 4 {
+			t.Fatalf("expected current=5 expected=4, got current=%d expected=%d", typedErr.Current, typedErr.Expected)
+		}
+		if got := typedErr.Error(); !strings.Contains(got, "current=5") || !strings.Contains(got, "expected=4") {
+			t.Fatalf("expected error details in message, got %q", got)
 		}
 	})
 

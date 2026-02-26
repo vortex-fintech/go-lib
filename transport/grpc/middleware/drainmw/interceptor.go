@@ -42,3 +42,15 @@ func Unary(c *Controller, isMutating func(fullMethod string) bool) grpc.UnarySer
 		return handler(ctx, req)
 	}
 }
+
+func Stream(c *Controller, isMutating func(fullMethod string) bool) grpc.StreamServerInterceptor {
+	if isMutating == nil {
+		isMutating = func(string) bool { return true }
+	}
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if c != nil && c.IsDraining() && isMutating(info.FullMethod) {
+			return status.Error(codes.Unavailable, "server is draining, retry later")
+		}
+		return handler(srv, ss)
+	}
+}

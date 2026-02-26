@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,8 +24,27 @@ func TestReserve_RequiresExpiresAt(t *testing.T) {
 		IdempotencyKey: "k1",
 		RequestHash:    "h1",
 	})
-	if err == nil {
-		t.Fatalf("expected error when expires_at is zero")
+	if !errors.Is(err, ErrExpiresAtRequired) {
+		t.Fatalf("expected ErrExpiresAtRequired, got %v", err)
+	}
+}
+
+func TestReserve_RejectsInvalidStatus(t *testing.T) {
+	t.Parallel()
+
+	s := NewPostgresStore()
+	r := &runnerStub{}
+
+	_, err := s.Reserve(context.Background(), r, Record{
+		Principal:      "u1",
+		GRPCMethod:     "/svc.Method",
+		IdempotencyKey: "k1",
+		RequestHash:    "h1",
+		Status:         Status("BROKEN"),
+		ExpiresAt:      time.Now().UTC().Add(5 * time.Minute),
+	})
+	if !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("expected ErrInvalidStatus, got %v", err)
 	}
 }
 
@@ -115,6 +135,39 @@ func TestReserve_OnConflictReturnsExisting(t *testing.T) {
 	}
 }
 
+func TestReserve_OnConflictRejectsRequestHashMismatch(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	existing := Record{
+		Principal:      "u1",
+		GRPCMethod:     "/svc.Method",
+		IdempotencyKey: "k1",
+		RequestHash:    "h-original",
+		Status:         StatusSucceeded,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ExpiresAt:      now.Add(5 * time.Minute),
+	}
+
+	r := &runnerStub{rows: []pgx.Row{
+		rowStub{err: sql.ErrNoRows},
+		rowStub{scanFn: scanRecord(existing)},
+	}}
+	s := NewPostgresStore()
+
+	_, err := s.Reserve(context.Background(), r, Record{
+		Principal:      "u1",
+		GRPCMethod:     "/svc.Method",
+		IdempotencyKey: "k1",
+		RequestHash:    "h-changed",
+		ExpiresAt:      now.Add(5 * time.Minute),
+	})
+	if !errors.Is(err, ErrRequestHashMismatch) {
+		t.Fatalf("expected ErrRequestHashMismatch, got %v", err)
+	}
+}
+
 func TestGet_NotFound(t *testing.T) {
 	t.Parallel()
 
@@ -135,13 +188,17 @@ func TestReacquireRetryable_And_Complete(t *testing.T) {
 
 	r := &runnerStub{execResults: []execResult{{tag: mustTag("UPDATE 1")}, {tag: mustTag("UPDATE 0")}, {tag: mustTag("UPDATE 1")}}}
 	s := NewPostgresStore()
+	lease := time.Now().UTC()
 
-	ok, err := s.ReacquireRetryable(context.Background(), r, "u1", "/svc.Method", "k1", "h1", time.Now().UTC())
+	ok, err := s.ReacquireRetryable(context.Background(), r, "u1", "/svc.Method", "k1", "h1", lease)
 	if err != nil || !ok {
 		t.Fatalf("expected reacquire true, err=%v", err)
 	}
+	if len(r.execSQL) == 0 || !strings.Contains(r.execSQL[0], "expires_at > $1") || !strings.Contains(r.execSQL[0], "updated_at < $1") {
+		t.Fatalf("expected expiry guard in reacquire query, got %q", firstOrEmpty(r.execSQL))
+	}
 
-	ok, err = s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusSucceeded})
+	ok, err = s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusSucceeded, UpdatedAt: lease.Add(time.Second)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -149,9 +206,48 @@ func TestReacquireRetryable_And_Complete(t *testing.T) {
 		t.Fatalf("expected false when no rows updated")
 	}
 
-	ok, err = s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusFailedFinal, UpdatedAt: time.Now()})
+	ok, err = s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusFailedFinal, UpdatedAt: lease})
 	if err != nil || !ok {
 		t.Fatalf("expected complete true, err=%v", err)
+	}
+	if len(r.execSQL) < 2 || !strings.Contains(r.execSQL[1], "updated_at = $9") {
+		t.Fatalf("expected optimistic-lock guard in complete query, got %q", r.execSQL[1])
+	}
+}
+
+func TestReacquireRetryable_RequiresUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	s := NewPostgresStore()
+	r := &runnerStub{}
+
+	_, err := s.ReacquireRetryable(context.Background(), r, "u1", "/svc.Method", "k1", "h1", time.Time{})
+	if !errors.Is(err, ErrUpdatedAtRequired) {
+		t.Fatalf("expected ErrUpdatedAtRequired, got %v", err)
+	}
+}
+
+func TestComplete_RejectsNonTerminalStatus(t *testing.T) {
+	t.Parallel()
+
+	s := NewPostgresStore()
+	r := &runnerStub{}
+
+	_, err := s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusInProgress})
+	if !errors.Is(err, ErrCompletionNotTerminal) {
+		t.Fatalf("expected ErrCompletionNotTerminal, got %v", err)
+	}
+}
+
+func TestComplete_RequiresUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	s := NewPostgresStore()
+	r := &runnerStub{}
+
+	_, err := s.Complete(context.Background(), r, "u1", "/svc.Method", "k1", Completion{Status: StatusSucceeded})
+	if !errors.Is(err, ErrUpdatedAtRequired) {
+		t.Fatalf("expected ErrUpdatedAtRequired, got %v", err)
 	}
 }
 
@@ -168,6 +264,9 @@ func TestDeleteExpired(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("expected 3 deleted rows, got %d", n)
 	}
+	if len(r.execSQL) == 0 || !strings.Contains(r.execSQL[0], "status IN ('SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_FINAL')") {
+		t.Fatalf("expected terminal-status guard in cleanup query, got %q", firstOrEmpty(r.execSQL))
+	}
 }
 
 func TestNullIfEmpty(t *testing.T) {
@@ -181,6 +280,80 @@ func TestNullIfEmpty(t *testing.T) {
 	}
 }
 
+func TestPostgresStore_TODOContext_IsPropagated(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ctx := context.TODO()
+	fromDB := Record{
+		Principal:      "u1",
+		GRPCMethod:     "/svc.Method",
+		IdempotencyKey: "k1",
+		RequestHash:    "h1",
+		Status:         StatusInProgress,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ExpiresAt:      now.Add(5 * time.Minute),
+	}
+
+	r := &runnerStub{
+		rows: []pgx.Row{
+			rowStub{scanFn: scanRecord(fromDB)},
+			rowStub{scanFn: scanRecord(fromDB)},
+		},
+		execResults: []execResult{
+			{tag: mustTag("UPDATE 1")},
+			{tag: mustTag("UPDATE 1")},
+			{tag: mustTag("DELETE 1")},
+		},
+	}
+	s := NewPostgresStore()
+
+	if _, err := s.Reserve(ctx, r, Record{
+		Principal:      "u1",
+		GRPCMethod:     "/svc.Method",
+		IdempotencyKey: "k1",
+		RequestHash:    "h1",
+		ExpiresAt:      now.Add(5 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Reserve(ctx, ...): %v", err)
+	}
+
+	if _, err := s.Get(ctx, r, "u1", "/svc.Method", "k1"); err != nil {
+		t.Fatalf("Get(ctx, ...): %v", err)
+	}
+
+	if _, err := s.ReacquireRetryable(ctx, r, "u1", "/svc.Method", "k1", "h1", now.Add(time.Second)); err != nil {
+		t.Fatalf("ReacquireRetryable(ctx, ...): %v", err)
+	}
+
+	if _, err := s.Complete(ctx, r, "u1", "/svc.Method", "k1", Completion{Status: StatusSucceeded, UpdatedAt: now}); err != nil {
+		t.Fatalf("Complete(ctx, ...): %v", err)
+	}
+
+	if _, err := s.DeleteExpired(ctx, r, now.Add(10*time.Minute)); err != nil {
+		t.Fatalf("DeleteExpired(ctx, ...): %v", err)
+	}
+
+	if len(r.queryRowCtxs) == 0 {
+		t.Fatalf("expected query contexts to be captured")
+	}
+	for i, gotCtx := range r.queryRowCtxs {
+		if gotCtx != ctx {
+			t.Fatalf("query context at index %d does not match provided context", i)
+		}
+	}
+
+	if len(r.execCtxs) == 0 {
+		t.Fatalf("expected exec contexts to be captured")
+	}
+	for i, gotCtx := range r.execCtxs {
+		if gotCtx != ctx {
+			t.Fatalf("exec context at index %d does not match provided context", i)
+		}
+	}
+}
+
 type execResult struct {
 	tag pgconn.CommandTag
 	err error
@@ -188,12 +361,19 @@ type execResult struct {
 
 type runnerStub struct {
 	rows         []pgx.Row
+	queryRowCtxs []context.Context
 	queryRowArgs [][]any
+	execCtxs     []context.Context
 	execResults  []execResult
 	execCalls    int
+	execSQL      []string
+	execArgs     [][]any
 }
 
-func (r *runnerStub) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+func (r *runnerStub) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	r.execCtxs = append(r.execCtxs, ctx)
+	r.execSQL = append(r.execSQL, sql)
+	r.execArgs = append(r.execArgs, args)
 	if r.execCalls >= len(r.execResults) {
 		return mustTag("UPDATE 0"), nil
 	}
@@ -206,7 +386,8 @@ func (r *runnerStub) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	return nil, errors.New("not implemented")
 }
 
-func (r *runnerStub) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+func (r *runnerStub) QueryRow(ctx context.Context, _ string, args ...any) pgx.Row {
+	r.queryRowCtxs = append(r.queryRowCtxs, ctx)
 	r.queryRowArgs = append(r.queryRowArgs, args)
 	if len(r.rows) == 0 {
 		return rowStub{err: sql.ErrNoRows}
@@ -250,4 +431,11 @@ func scanRecord(rec Record) func(dest ...any) error {
 
 func mustTag(v string) pgconn.CommandTag {
 	return pgconn.NewCommandTag(v)
+}
+
+func firstOrEmpty(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
 }

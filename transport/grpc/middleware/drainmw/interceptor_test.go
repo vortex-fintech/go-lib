@@ -42,3 +42,49 @@ func TestUnary_NilControllerAllows(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestUnary_NilIsMutatingDefaultsToTrue(t *testing.T) {
+	c := NewController()
+	c.StartDraining()
+	i := Unary(c, nil)
+	_, err := i(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/M"}, func(context.Context, any) (any, error) {
+		return nil, nil
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable with nil isMutating, got %v", status.Code(err))
+	}
+}
+
+func TestStream_BlocksMutatingWhenDraining(t *testing.T) {
+	c := NewController()
+	c.StartDraining()
+	i := Stream(c, func(string) bool { return true })
+	err := i(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/M"}, func(any, grpc.ServerStream) error {
+		return nil
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", status.Code(err))
+	}
+}
+
+func TestStream_AllowsReadWhenDraining(t *testing.T) {
+	c := NewController()
+	c.StartDraining()
+	i := Stream(c, func(string) bool { return false })
+	err := i(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/R"}, func(any, grpc.ServerStream) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestStream_NilControllerAllows(t *testing.T) {
+	i := Stream(nil, nil)
+	err := i(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/M"}, func(any, grpc.ServerStream) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

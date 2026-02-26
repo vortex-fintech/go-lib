@@ -191,3 +191,27 @@ func TestHTTPAdapter_CustomName(t *testing.T) {
 		t.Fatalf("expected custom name 'my-http', got %q", got)
 	}
 }
+
+func TestHTTPAdapter_NilSrv_Serve(t *testing.T) {
+	t.Parallel()
+	ad := &HTTP{Srv: nil}
+	err := ad.Serve(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil Srv")
+	}
+}
+
+func TestHTTPAdapter_NilSrv_GracefulStop(t *testing.T) {
+	t.Parallel()
+	ad := &HTTP{Srv: nil}
+	err := ad.GracefulStopWithTimeout(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil Srv")
+	}
+}
+
+func TestHTTPAdapter_NilSrv_ForceStop(t *testing.T) {
+	t.Parallel()
+	ad := &HTTP{Srv: nil}
+	ad.ForceStop() // should not panic
+}

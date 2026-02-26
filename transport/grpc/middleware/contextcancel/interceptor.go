@@ -30,3 +30,27 @@ func Unary() grpc.UnaryServerInterceptor {
 		return resp, err
 	}
 }
+
+func Stream() grpc.StreamServerInterceptor {
+	return func(
+		srv any,
+		ss grpc.ServerStream,
+		info *grpc.StreamServerInfo,
+		handler grpc.StreamHandler,
+	) error {
+
+		if err := ss.Context().Err(); err != nil {
+			return status.FromContextError(err).Err()
+		}
+
+		err := handler(srv, ss)
+
+		if err == nil {
+			if cerr := ss.Context().Err(); cerr != nil {
+				return status.FromContextError(cerr).Err()
+			}
+		}
+
+		return err
+	}
+}

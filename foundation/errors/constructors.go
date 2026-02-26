@@ -2,12 +2,13 @@ package errors
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
 )
 
-// Newf — форматированный конструктор с reason.
+// Newf is a formatted constructor with reason.
 func Newf(code codes.Code, reason, format string, a ...any) ErrorResponse {
 	return New(fmt.Sprintf(format, a...), code, nil).WithReason(reason)
 }
@@ -22,7 +23,7 @@ func Precondition(reason string, details map[string]string) ErrorResponse {
 	return FailedPrecondition().WithReason(reason).WithDetails(details)
 }
 
-// Unauthorized с подсказками для клиента.
+// Unauthorized with optional client hints.
 func Unauthorized(scheme, realm string) ErrorResponse {
 	e := Unauthenticated().WithReason("unauthorized")
 	if scheme != "" {
@@ -34,7 +35,7 @@ func Unauthorized(scheme, realm string) ErrorResponse {
 	return e
 }
 
-// Forbidden для RBAC.
+// Forbidden for RBAC checks.
 func Forbidden(action, resource string) ErrorResponse {
 	return PermissionDenied().
 		WithReason("forbidden").
@@ -48,10 +49,13 @@ func NotFoundID(resource, id string) ErrorResponse {
 		WithDetail(resource+"_id", id)
 }
 
-// RateLimited — с machine-friendly задержкой в мс.
+// RateLimited with machine-friendly retry delay in milliseconds.
 func RateLimited(retryAfter time.Duration) ErrorResponse {
-	ms := int(retryAfter / time.Millisecond)
+	ms := retryAfter.Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
 	return ResourceExhausted().
 		WithReason("rate_limited").
-		WithDetail("retry_after_ms", fmt.Sprintf("%d", ms))
+		WithDetail("retry_after_ms", strconv.FormatInt(ms, 10))
 }

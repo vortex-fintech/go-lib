@@ -89,3 +89,42 @@ func TestGRPCAdapter_CustomName(t *testing.T) {
 		t.Fatalf("expected custom name 'my-grpc', got %q", got)
 	}
 }
+
+func TestGRPCAdapter_NilSrv_Serve(t *testing.T) {
+	t.Parallel()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer lis.Close()
+
+	ad := &GRPC{Srv: nil, Lis: lis}
+	err = ad.Serve(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil Srv")
+	}
+}
+
+func TestGRPCAdapter_NilLis_Serve(t *testing.T) {
+	t.Parallel()
+	ad := &GRPC{Srv: grpc.NewServer(), Lis: nil}
+	err := ad.Serve(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil Lis")
+	}
+}
+
+func TestGRPCAdapter_NilSrv_GracefulStop(t *testing.T) {
+	t.Parallel()
+	ad := &GRPC{Srv: nil}
+	err := ad.GracefulStopWithTimeout(context.Background())
+	if err == nil {
+		t.Fatal("expected error for nil Srv")
+	}
+}
+
+func TestGRPCAdapter_NilSrv_ForceStop(t *testing.T) {
+	t.Parallel()
+	ad := &GRPC{Srv: nil}
+	ad.ForceStop() // should not panic
+}

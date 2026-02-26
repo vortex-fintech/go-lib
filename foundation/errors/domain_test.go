@@ -100,6 +100,15 @@ func TestToErrorResponsePassThrough(t *testing.T) {
 	}
 }
 
+func TestToErrorResponsePassThroughPointer(t *testing.T) {
+	in := InvalidArgument().WithReason("bad").WithDetail("x", "y")
+	err := &in
+	out := ToErrorResponse(err)
+	if out.Reason != "bad" || out.Details["x"] != "y" {
+		t.Fatalf("pointer passthrough mismatch")
+	}
+}
+
 func TestToErrorResponseFromWrappedDomain(t *testing.T) {
 	err := fmt.Errorf("wrap: %w", DomainInvariant("email", "invalid_email"))
 	out := ToErrorResponse(err)

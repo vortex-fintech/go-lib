@@ -158,10 +158,7 @@ func ValidateOBO(now time.Time, cl *Claims, opt OBOValidateOptions) error {
 
 	// 3) время жизни: exp/iat + leeway
 	n := now.Unix()
-	leeway := opt.Leeway
-	if leeway < 0 {
-		leeway = 0
-	}
+	leeway := max(opt.Leeway, 0)
 	if cl.Exp <= n-int64(leeway.Seconds()) {
 		return ErrExpired
 	}

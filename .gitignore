@@ -12,6 +12,7 @@ build/
 dist/
 
 # Test coverage
+coverage/
 coverage.*
 *.coverprofile
 *.cov
@@ -44,10 +45,6 @@ vendor/
 # Dependency directories (remove if you use vendoring)
 Gopkg.lock
 Gopkg.toml
-
-# Go workspace file
-go.work
-go.work.sum
 
 # Node (if present)
 node_modules/

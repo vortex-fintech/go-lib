@@ -2,7 +2,7 @@ module github.com/vortex-fintech/go-lib/runtime
 
 go 1.25
 
-toolchain go1.25.1
+toolchain go1.25.7
 
 require (
 	github.com/prometheus/client_golang v1.23.2

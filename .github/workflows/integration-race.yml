@@ -1,0 +1,106 @@
+name: Integration and Race
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: integration-race-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.7
+          cache-dependency-path: |
+            foundation/go.sum
+            security/go.sum
+            transport/go.sum
+            data/go.sum
+            runtime/go.sum
+            messaging/kafka/franzgo/go.sum
+            messaging/kafka/schemaregistry/go.sum
+
+      - name: Download modules
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+            (cd "$m" && go mod download)
+          done
+
+      - name: Start Postgres and Redis
+        run: |
+          docker compose -f data/postgres/docker-compose.test.yml up -d
+          docker compose -f data/redis/docker-compose.test.yml up -d
+
+      - name: Start Redpanda
+        run: |
+          docker rm -f redpanda-test || true
+          docker run -d --name redpanda-test -p 9092:9092 -p 9644:9644 \
+            docker.redpanda.com/redpandadata/redpanda:v25.1.5 \
+            redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M \
+            --node-id 0 --check=false \
+            --kafka-addr PLAINTEXT://0.0.0.0:9092 \
+            --advertise-kafka-addr PLAINTEXT://localhost:9092
+
+      - name: Wait for Redpanda
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec redpanda-test rpk cluster info >/tmp/redpanda-ready.log 2>&1; then
+              cat /tmp/redpanda-ready.log
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/redpanda-ready.log
+          exit 1
+
+      - name: Run integration tests
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          (cd data && go test -count=1 -tags integration ./...)
+          (cd runtime && go test -count=1 -tags integration ./...)
+          (cd messaging/kafka/franzgo && KAFKA_BROKER=localhost:9092 go test -count=1 -tags integration ./...)
+
+      - name: Stop test infrastructure
+        if: always()
+        run: |
+          docker compose -f data/postgres/docker-compose.test.yml down -v || true
+          docker compose -f data/redis/docker-compose.test.yml down -v || true
+          docker rm -f redpanda-test || true
+
+  race:
+    name: Race tests in Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run race suite in container
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/work" golang:1.25.7 sh -c '
+            set -e
+            cd /work/foundation && go mod download && go test -race -count=1 ./...
+            cd /work/security && go mod download && go test -race -count=1 ./...
+            cd /work/transport && go mod download && go test -race -count=1 ./...
+            cd /work/data && go mod download && go test -race -count=1 ./...
+            cd /work/runtime && go mod download && go test -race -count=1 ./...
+            cd /work/messaging/kafka/franzgo && go mod download && go test -race -count=1 ./...
+            cd /work/messaging/kafka/schemaregistry && go mod download && go test -race -count=1 ./...
+          '

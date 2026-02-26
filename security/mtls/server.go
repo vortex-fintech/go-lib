@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// TLSConfigServer constructs a hardened server-side *tls.Config for mTLS.
 func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 	b, err := loadBundle(c)
 	if err != nil {
@@ -17,12 +16,10 @@ func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 	state.Store(b)
 
 	tlsConf := &tls.Config{
-		MinVersion:               tls.VersionTLS12,
-		PreferServerCipherSuites: true,
-		ClientAuth:               tls.RequireAndVerifyClientCert,
-		ClientCAs:                b.rootPool,
-		Certificates:             []tls.Certificate{b.cert},
-		// Disable session tickets to reduce key material reuse in internal mesh.
+		MinVersion:             tls.VersionTLS13,
+		ClientAuth:             tls.RequireAndVerifyClientCert,
+		ClientCAs:              b.rootPool,
+		Certificates:           []tls.Certificate{b.cert},
 		SessionTicketsDisabled: true,
 	}
 	tlsConf.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
@@ -34,9 +31,6 @@ func TLSConfigServer(c Config) (*tls.Config, *Reloader, error) {
 		return conf, nil
 	}
 
-	// Curve and cipher preferences are mostly automatic in modern Go; keep defaults.
-
-	// Optional reloader.
 	var r *Reloader
 	if c.ReloadInterval > 0 {
 		r = NewReloader(c, func(nb *bundle) {

@@ -2,15 +2,15 @@ package timeutil
 
 import "time"
 
-// InPeriod возвращает true, если момент t попадает в полуинтервал [from, to),
-// где from/to могут быть nil:
-//   - from == nil -> нижняя граница -∞
-//   - to == nil   -> верхняя граница +∞
+// InPeriod returns true when t is inside half-open interval [from, to).
+// Boundaries can be nil:
+//   - from == nil -> lower bound is -infinity
+//   - to == nil   -> upper bound is +infinity
 func InPeriod(from, to *time.Time, t time.Time) bool {
 	if from != nil && t.Before(*from) {
 		return false
 	}
-	// to — исключая границу: t >= to => false
+	// to is exclusive boundary: t >= to => false
 	if to != nil && !t.Before(*to) {
 		return false
 	}

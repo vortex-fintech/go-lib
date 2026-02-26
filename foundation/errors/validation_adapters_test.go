@@ -33,7 +33,7 @@ func TestFromPlaygroundStructNamespace(t *testing.T) {
 		t.Fatalf("expected InvalidArgument, got %v", resp.Code)
 	}
 
-	// Проверяем, что есть хотя бы одна violation с путём, содержащим "User.Email"
+	// Ensure at least one violation path contains "User.Email".
 	hasNested := false
 	for _, v := range resp.Violations {
 		if strings.Contains(v.Field, "User.Email") {

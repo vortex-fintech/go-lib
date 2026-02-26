@@ -2,9 +2,16 @@ package franzgo
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	kgo "github.com/twmb/franz-go/pkg/kgo"
+)
+
+var (
+	ErrConsumerClientNil  = errors.New("consumer client is nil")
+	ErrConsumerHandlerNil = errors.New("consumer handler is nil")
 )
 
 type Message struct {
@@ -32,6 +39,12 @@ func NewConsumer(client *Client, group string) *Consumer {
 }
 
 func (c *Consumer) Consume(ctx context.Context, topics []string, handler HandlerFunc) error {
+	if c == nil || c.client == nil || c.client.Client == nil {
+		return ErrConsumerClientNil
+	}
+	if handler == nil {
+		return ErrConsumerHandlerNil
+	}
 	if len(topics) == 0 {
 		return nil
 	}
@@ -44,8 +57,15 @@ func (c *Consumer) Consume(ctx context.Context, topics []string, handler Handler
 			return ctx.Err()
 		default:
 			fetches := c.client.PollFetches(ctx)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if fetches.IsClientClosed() {
 				return nil
+			}
+			if errs := fetches.Errors(); len(errs) > 0 {
+				first := errs[0]
+				return fmt.Errorf("kafka fetch failed for %s[%d]: %w", first.Topic, first.Partition, first.Err)
 			}
 
 			iter := fetches.RecordIter()

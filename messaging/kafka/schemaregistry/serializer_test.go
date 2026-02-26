@@ -2,6 +2,7 @@ package schemaregistry
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -57,8 +58,13 @@ func TestProtoSerializer_Caching(t *testing.T) {
 		t.Fatalf("expected ID 123, got %d", firstID)
 	}
 
-	if len(encoded) < 6 || encoded[5] != 0 {
-		t.Fatalf("expected protobuf message-index shortcut in header")
+	_, indexes, err := decodeHeaderIndexes(encoded)
+	if err != nil {
+		t.Fatalf("decode header indexes failed: %v", err)
+	}
+	expected := protobufMessageIndexPath(msg)
+	if !reflect.DeepEqual(indexes, expected) {
+		t.Fatalf("unexpected indexes: got %v, want %v", indexes, expected)
 	}
 
 	_, secondID, err := serializer.Serialize("test-value", msg)
@@ -179,6 +185,43 @@ func TestProtoSerializer_ReRegistersOnSchemaChange(t *testing.T) {
 	}
 }
 
+func TestProtoSerializer_DifferentMessagesUseDifferentIndexes(t *testing.T) {
+	registry := &mockRegistry{schemas: map[string]string{}, ids: map[string]int{}}
+	serializer := NewProtoSerializer(registry)
+	schema := `syntax = "proto3"; package google.protobuf; message Placeholder { string value = 1; }`
+
+	first := &wrapperspb.BoolValue{Value: true}
+	second := &wrapperspb.DoubleValue{Value: 1.5}
+
+	encodedFirst, _, err := serializer.SerializeWithSchema("shared-subject", schema, first)
+	if err != nil {
+		t.Fatalf("first serialize failed: %v", err)
+	}
+	encodedSecond, _, err := serializer.Serialize("shared-subject", second)
+	if err != nil {
+		t.Fatalf("second serialize failed: %v", err)
+	}
+
+	_, firstIndexes, err := decodeHeaderIndexes(encodedFirst)
+	if err != nil {
+		t.Fatalf("decode first indexes failed: %v", err)
+	}
+	_, secondIndexes, err := decodeHeaderIndexes(encodedSecond)
+	if err != nil {
+		t.Fatalf("decode second indexes failed: %v", err)
+	}
+
+	if !reflect.DeepEqual(firstIndexes, protobufMessageIndexPath(first)) {
+		t.Fatalf("first indexes mismatch: got %v want %v", firstIndexes, protobufMessageIndexPath(first))
+	}
+	if !reflect.DeepEqual(secondIndexes, protobufMessageIndexPath(second)) {
+		t.Fatalf("second indexes mismatch: got %v want %v", secondIndexes, protobufMessageIndexPath(second))
+	}
+	if reflect.DeepEqual(firstIndexes, secondIndexes) {
+		t.Fatalf("expected different index paths, got %v and %v", firstIndexes, secondIndexes)
+	}
+}
+
 type mockRegistry struct {
 	schemas               map[string]string
 	ids                   map[string]int
@@ -226,4 +269,16 @@ type registerCall struct {
 	subject string
 	schema  string
 	refs    []SchemaReference
+}
+
+func decodeHeaderIndexes(data []byte) (int, []int, error) {
+	id, body, err := confluentHeader.DecodeID(data)
+	if err != nil {
+		return 0, nil, err
+	}
+	indexes, _, err := confluentHeader.DecodeIndex(body, 0)
+	if err != nil {
+		return 0, nil, err
+	}
+	return id, indexes, nil
 }

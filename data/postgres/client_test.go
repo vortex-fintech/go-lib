@@ -17,7 +17,7 @@ import (
 
 func TestOpen_Success(t *testing.T) {
 	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
-		// вернём nil — ping заменён хуком ниже
+		// Return nil pool, ping is replaced by hook below.
 		return (*pgxpool.Pool)(nil), nil
 	})
 	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return nil })
@@ -68,6 +68,28 @@ func TestOpen_PingError(t *testing.T) {
 	require.Contains(t, err.Error(), "ping failed")
 }
 
+func TestOpen_NilContext_UsesBackground(t *testing.T) {
+	var seenCtx context.Context
+
+	origNewPool := postgres.TestHookSetNewPool(func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+		seenCtx = ctx
+		return (*pgxpool.Pool)(nil), nil
+	})
+	origPing := postgres.TestHookSetPingPool(func(ctx context.Context, p *pgxpool.Pool) error { return nil })
+	t.Cleanup(func() {
+		postgres.TestHookSetNewPool(origNewPool)
+		postgres.TestHookSetPingPool(origPing)
+	})
+
+	cfg := postgres.Config{URL: "postgres://u:p@h:5432/d?sslmode=disable"}
+
+	c, err := postgres.Open(nil, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.NotNil(t, seenCtx)
+	c.Close()
+}
+
 func TestConstraint_And_Unique(t *testing.T) {
 	pgErr := &pgconn.PgError{
 		Code:           postgres.SQLStateUniqueViolation,
@@ -80,6 +102,6 @@ func TestConstraint_And_Unique(t *testing.T) {
 	require.Equal(t, "users_credentials_email_key", info.Name)
 	require.True(t, info.IsUnique)
 
-	// заодно проверим шорткат-хелпер
+	// Also verify helper shortcut.
 	require.True(t, postgres.IsUniqueViolation(pgErr))
 }

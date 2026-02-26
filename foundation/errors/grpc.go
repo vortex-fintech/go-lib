@@ -1,31 +1,43 @@
 package errors
 
 import (
+	"strings"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
+const violationReasonMetadataPrefix = "_errors.violation_reason."
+
 func (e ErrorResponse) ToGRPC() error {
 	st := status.New(e.Code, e.Message)
 
-	// ErrorInfo: reason + metadata + domain (если задан)
-	if e.Reason != "" || len(e.Details) > 0 || e.Domain != "" {
+	metadata := cloneDetails(e.Details)
+	for _, v := range e.Violations {
+		if v.Field == "" || v.Reason == "" {
+			continue
+		}
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		metadata[violationReasonMetadataPrefix+v.Field] = v.Reason
+	}
+
+	// ErrorInfo: reason + metadata + domain (if provided).
+	if e.Reason != "" || len(metadata) > 0 || e.Domain != "" {
 		ei := &errdetails.ErrorInfo{
 			Reason:   string(e.Reason),
 			Domain:   e.Domain,
-			Metadata: map[string]string{},
-		}
-		for k, v := range e.Details {
-			ei.Metadata[k] = v
+			Metadata: metadata,
 		}
 		if st2, err := st.WithDetails(ei); err == nil {
 			st = st2
 		}
 	}
 
-	// BadRequest для InvalidArgument
+	// BadRequest details for InvalidArgument.
 	if len(e.Violations) > 0 && e.Code == codes.InvalidArgument {
 		br := &errdetails.BadRequest{
 			FieldViolations: make([]*errdetails.BadRequest_FieldViolation, 0, len(e.Violations)),
@@ -54,6 +66,7 @@ func FromGRPC(err error) ErrorResponse {
 		return Unknown()
 	}
 	out := New(st.Message(), st.Code(), nil)
+	var violationReasons map[string]string
 	for _, d := range st.Details() {
 		switch x := d.(type) {
 		case *errdetails.ErrorInfo:
@@ -64,16 +77,35 @@ func FromGRPC(err error) ErrorResponse {
 				out.Domain = dom
 			}
 			if md := x.GetMetadata(); len(md) > 0 {
-				out = out.WithDetails(md)
+				details := make(map[string]string, len(md))
+				for k, v := range md {
+					if strings.HasPrefix(k, violationReasonMetadataPrefix) {
+						field := strings.TrimPrefix(k, violationReasonMetadataPrefix)
+						if field == "" {
+							continue
+						}
+						if violationReasons == nil {
+							violationReasons = map[string]string{}
+						}
+						violationReasons[field] = v
+						continue
+					}
+					details[k] = v
+				}
+				if len(details) > 0 {
+					out = out.WithDetails(details)
+				}
 			}
 		case *errdetails.BadRequest:
 			if len(x.FieldViolations) > 0 {
 				vs := make([]FieldViolation, 0, len(x.FieldViolations))
 				for _, fv := range x.FieldViolations {
-					vs = append(vs, FieldViolation{
-						Field:       fv.GetField(),
-						Description: fv.GetDescription(),
-					})
+					field := fv.GetField()
+					violation := FieldViolation{Field: field, Description: fv.GetDescription()}
+					if reason, ok := violationReasons[field]; ok {
+						violation.Reason = reason
+					}
+					vs = append(vs, violation)
 				}
 				out.Violations = vs
 			}

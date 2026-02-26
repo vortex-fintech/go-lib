@@ -29,6 +29,22 @@ func Unary(opts Options) grpc.UnaryServerInterceptor {
 	}
 }
 
+func Stream(opts Options) grpc.StreamServerInterceptor {
+	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			if opts.OnPanic != nil {
+				opts.OnPanic(ss.Context(), info.FullMethod, r)
+			}
+			err = status.Error(codes.Internal, "internal server error")
+		}()
+		return handler(srv, ss)
+	}
+}
+
 func PanicString(v any) string {
 	switch t := v.(type) {
 	case string:

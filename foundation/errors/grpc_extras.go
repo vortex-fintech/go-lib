@@ -1,7 +1,7 @@
 package errors
 
 import (
-	"fmt"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -11,14 +11,18 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// GRPCRateLimited — готовый gRPC error с RetryInfo + ErrorInfo(reason).
+// GRPCRateLimited returns a ready gRPC error with RetryInfo + ErrorInfo(reason).
 func GRPCRateLimited(retryAfter time.Duration) error {
+	if retryAfter < 0 {
+		retryAfter = 0
+	}
+
 	st := status.New(codes.ResourceExhausted, "Rate limited")
 
 	ri := &errdetails.RetryInfo{RetryDelay: durationpb.New(retryAfter)}
 	ei := &errdetails.ErrorInfo{
 		Reason:   "rate_limited",
-		Metadata: map[string]string{"retry_after_ms": fmt.Sprintf("%d", retryAfter.Milliseconds())},
+		Metadata: map[string]string{"retry_after_ms": strconv.FormatInt(retryAfter.Milliseconds(), 10)},
 	}
 
 	st2, err := st.WithDetails(ri, ei)

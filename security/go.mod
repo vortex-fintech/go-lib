@@ -2,7 +2,7 @@ module github.com/vortex-fintech/go-lib/security
 
 go 1.25
 
-toolchain go1.25.1
+toolchain go1.25.7
 
 require (
 	github.com/google/uuid v1.6.0

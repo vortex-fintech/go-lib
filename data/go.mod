@@ -2,7 +2,7 @@ module github.com/vortex-fintech/go-lib/data
 
 go 1.25
 
-toolchain go1.25.1
+toolchain go1.25.7
 
 require (
 	github.com/jackc/pgx/v5 v5.7.6

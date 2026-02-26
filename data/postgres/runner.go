@@ -8,14 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Runner — единый интерфейс для пула и транзакции.
+// Runner is a shared interface for pool and transaction.
 type Runner interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// poolRunner — реализация Runner для пула.
+// poolRunner is a Runner implementation backed by pool.
 type poolRunner struct{ p *pgxpool.Pool }
 
 func (r poolRunner) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
@@ -28,7 +28,7 @@ func (r poolRunner) QueryRow(ctx context.Context, q string, args ...any) pgx.Row
 	return r.p.QueryRow(ctx, q, args...)
 }
 
-// txRunner — реализация Runner для транзакции.
+// txRunner is a Runner implementation backed by transaction.
 type txRunner struct{ tx pgx.Tx }
 
 func (r txRunner) Exec(ctx context.Context, q string, args ...any) (pgconn.CommandTag, error) {
@@ -41,8 +41,8 @@ func (r txRunner) QueryRow(ctx context.Context, q string, args ...any) pgx.Row {
 	return r.tx.QueryRow(ctx, q, args...)
 }
 
-// (опционально)
+// RawTx exposes underlying pgx.Tx when needed.
 func (r txRunner) RawTx() pgx.Tx { return r.tx }
 
-// RunnerFromPool — получить Runner для пула (вне транзакции).
+// RunnerFromPool returns pool-backed Runner (outside transaction).
 func (c *Client) RunnerFromPool() Runner { return poolRunner{p: c.Pool} }

@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify before release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.7
+          cache-dependency-path: |
+            foundation/go.sum
+            security/go.sum
+            transport/go.sum
+            data/go.sum
+            runtime/go.sum
+            messaging/kafka/franzgo/go.sum
+            messaging/kafka/schemaregistry/go.sum
+
+      - name: Build all modules
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+            (cd "$m" && go mod download && go build ./...)
+          done
+
+      - name: Run tests
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+            (cd "$m" && go test -count=1 ./...)
+          done
+          (cd foundation && go test -count=1 -tags unit ./...)
+          (cd runtime && go test -count=1 -tags unit ./...)
+          (cd data && go test -count=1 -tags "unit testhooks" ./postgres)
+
+      - name: Run go vet
+        env:
+          GOFLAGS: -mod=readonly
+        run: |
+          for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
+            (cd "$m" && go vet ./...)
+          done
+
+  publish:
+    name: Publish GitHub Release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true

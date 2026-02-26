@@ -45,6 +45,9 @@ func WithAZP(ctx context.Context, azp string) context.Context {
 
 // Get читает одно значение ключа из incoming/outgoing MD (приоритет incoming).
 func Get(ctx context.Context, key string) string {
+	if ctx == nil {
+		return ""
+	}
 	if md, ok := gmd.FromIncomingContext(ctx); ok {
 		if v := md.Get(key); len(v) > 0 {
 			return v[0]
@@ -58,8 +61,28 @@ func Get(ctx context.Context, key string) string {
 	return ""
 }
 
+func GetAll(ctx context.Context, key string) []string {
+	if ctx == nil {
+		return nil
+	}
+	if md, ok := gmd.FromIncomingContext(ctx); ok {
+		if v := md.Get(key); len(v) > 0 {
+			return v
+		}
+	}
+	if md, ok := gmd.FromOutgoingContext(ctx); ok {
+		if v := md.Get(key); len(v) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
 // mergeOutgoing мерджит ключи в OutgoingContext (перезаписывая одноимённые).
 func mergeOutgoing(ctx context.Context, kv map[string]string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	old, _ := gmd.FromOutgoingContext(ctx)
 	cp := old.Copy()
 	for k, v := range kv {

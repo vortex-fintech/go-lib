@@ -2,23 +2,39 @@ package geo
 
 import "strings"
 
-// NormalizeISO2 приводит ISO 3166-1 alpha-2 код к верхнему регистру
-// и обрезает пробелы. Возвращает нормализованный код и ok=false,
-// если код некорректный (длина != 2).
+// NormalizeISO2 trims and uppercases an ASCII ISO2-like code.
+//
+// Validation here is format-only (two ASCII letters) and does not check
+// whether the code is an officially assigned ISO 3166-1 alpha-2 value.
 func NormalizeISO2(code string) (string, bool) {
-	c := strings.ToUpper(strings.TrimSpace(code))
+	c := strings.TrimSpace(code)
 	if len(c) != 2 {
 		return "", false
 	}
-	if c[0] < 'A' || c[0] > 'Z' || c[1] < 'A' || c[1] > 'Z' {
+
+	b0, b1 := c[0], c[1]
+	if !isASCIILetter(b0) || !isASCIILetter(b1) {
 		return "", false
 	}
-	return c, true
+
+	normalized := string([]byte{toUpperASCII(b0), toUpperASCII(b1)})
+	return normalized, true
 }
 
-// IsValidISO2 проверяет, что код похож на корректный ISO2 (длина == 2
-// после trim + upper). Для уже нормализованных значений.
+// IsValidISO2 validates whether a value can be normalized as a two-letter
+// ASCII ISO2-like code.
 func IsValidISO2(code string) bool {
 	_, ok := NormalizeISO2(code)
 	return ok
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
+func toUpperASCII(b byte) byte {
+	if b >= 'a' && b <= 'z' {
+		return b - ('a' - 'A')
+	}
+	return b
 }

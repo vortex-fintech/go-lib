@@ -2,6 +2,7 @@ package errors
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,10 +10,14 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+const statusClientClosedRequest = 499
+
 func HTTPStatus(code codes.Code) int {
 	switch code {
 	case codes.InvalidArgument:
 		return http.StatusBadRequest
+	case codes.Canceled:
+		return statusClientClosedRequest
 	case codes.DeadlineExceeded:
 		return http.StatusGatewayTimeout
 	case codes.NotFound:
@@ -65,9 +70,9 @@ func (e ErrorResponse) ToHTTP(w http.ResponseWriter) {
 	})
 }
 
-// Helper: добавить Retry-After (сек) и вернуть тело ошибки.
+// ToHTTPWithRetry sets Retry-After (seconds) and writes the error body.
 func (e ErrorResponse) ToHTTPWithRetry(w http.ResponseWriter, retryAfter time.Duration) {
-	sec := int(retryAfter.Round(time.Second) / time.Second)
+	sec := int(math.Ceil(retryAfter.Seconds()))
 	if sec < 0 {
 		sec = 0
 	}

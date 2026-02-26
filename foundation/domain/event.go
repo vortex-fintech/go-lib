@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/vortex-fintech/go-lib/foundation/timeutil"
@@ -18,44 +19,88 @@ type Event interface {
 	SchemaVer() int32
 }
 
-// Sentinel error (удобно для errors.Is)
+// Sentinel error for errors.Is checks.
 var ErrInvalidEvent = errors.New("invalid event")
 
-// Детализация причины (удобно для логов/диагностики)
+// Detailed reasons for logs and diagnostics.
 var (
 	ErrInvalidEventName     = errors.New("invalid event name")
 	ErrInvalidEventProducer = errors.New("invalid event producer")
 	ErrInvalidEventTime     = errors.New("invalid event time")
 	ErrInvalidEventID       = errors.New("invalid event id")
 	ErrInvalidEventSchema   = errors.New("invalid event schema version")
+	ErrInvalidEventNil      = errors.New("nil event")
+
+	ErrInvalidEventNameTooLong      = errors.New("event name too long")
+	ErrInvalidEventProducerTooLong  = errors.New("event producer too long")
+	ErrInvalidEventMetaTooMany      = errors.New("event meta has too many entries")
+	ErrInvalidEventMetaKey          = errors.New("invalid event meta key")
+	ErrInvalidEventMetaKeyTooLong   = errors.New("event meta key too long")
+	ErrInvalidEventMetaValueTooLong = errors.New("event meta value too long")
 )
 
-// BaseEvent — базовая мета-информация любого события.
-// Не содержит бизнес-данных и не привязан к Kafka/Transport.
+type EventLimits struct {
+	MaxNameRunes      int
+	MaxProducerRunes  int
+	MaxMetaEntries    int
+	MaxMetaKeyRunes   int
+	MaxMetaValueRunes int
+}
+
+var DefaultEventLimits = EventLimits{
+	MaxNameRunes:      128,
+	MaxProducerRunes:  64,
+	MaxMetaEntries:    32,
+	MaxMetaKeyRunes:   64,
+	MaxMetaValueRunes: 256,
+}
+
+func (l EventLimits) normalized() EventLimits {
+	out := l
+	if out.MaxNameRunes <= 0 {
+		out.MaxNameRunes = DefaultEventLimits.MaxNameRunes
+	}
+	if out.MaxProducerRunes <= 0 {
+		out.MaxProducerRunes = DefaultEventLimits.MaxProducerRunes
+	}
+	if out.MaxMetaEntries <= 0 {
+		out.MaxMetaEntries = DefaultEventLimits.MaxMetaEntries
+	}
+	if out.MaxMetaKeyRunes <= 0 {
+		out.MaxMetaKeyRunes = DefaultEventLimits.MaxMetaKeyRunes
+	}
+	if out.MaxMetaValueRunes <= 0 {
+		out.MaxMetaValueRunes = DefaultEventLimits.MaxMetaValueRunes
+	}
+	return out
+}
+
+// BaseEvent contains common event metadata.
+// It is transport-agnostic and does not contain business payload.
 type BaseEvent struct {
 	// Core
 	Name string
 	At   time.Time
 
-	// Idempotency / tracing
+	// Idempotency / tracing.
 	ID            uuid.UUID
 	TraceID       string
 	CorrelationID string
 	CausationID   uuid.UUID
 
-	// Compatibility
+	// Compatibility.
 	SchemaVersion int32
 
-	// Producer metadata
+	// Producer metadata.
 	Producer string
 
-	// Extensible, non-PII
+	// Extensible, non-PII metadata.
 	Meta map[string]string
 }
 
 var _ Event = BaseEvent{} // compile-time contract
 
-// NewBaseEvent — безопасный конструктор (UTC + UUID + schema v1).
+// NewBaseEvent creates a safe baseline event (UTC + UUID + schema v1).
 func NewBaseEvent(name, producer string) (BaseEvent, error) {
 	name = strings.TrimSpace(name)
 	producer = strings.TrimSpace(producer)
@@ -69,14 +114,14 @@ func NewBaseEvent(name, producer string) (BaseEvent, error) {
 
 	return BaseEvent{
 		Name:          name,
-		At:            timeutil.Now().UTC(), // ✅ жёстко приводим к UTC
+		At:            timeutil.Now().UTC(), // strict UTC
 		ID:            uuid.New(),
 		SchemaVersion: 1,
 		Producer:      producer,
 	}, nil
 }
 
-// MustBaseEvent — удобный хелпер для мест, где name/producer константы.
+// MustBaseEvent panics on constructor error.
 func MustBaseEvent(name, producer string) BaseEvent {
 	e, err := NewBaseEvent(name, producer)
 	if err != nil {
@@ -85,20 +130,20 @@ func MustBaseEvent(name, producer string) BaseEvent {
 	return e
 }
 
-// WithTrace — добавить trace/correlation (обычно выставляется в UC из контекста запроса).
+// WithTrace sets trace/correlation ids (usually from request context).
 func (e BaseEvent) WithTrace(traceID, correlationID string) BaseEvent {
 	e.TraceID = strings.TrimSpace(traceID)
 	e.CorrelationID = strings.TrimSpace(correlationID)
 	return e
 }
 
-// WithCausation — указать "что стало причиной" (например, EventID родительского события или CommandID).
+// WithCausation sets causation id (for example parent EventID or CommandID).
 func (e BaseEvent) WithCausation(id uuid.UUID) BaseEvent {
 	e.CausationID = id
 	return e
 }
 
-// WithMeta — copy-on-write для карты, чтобы не было скрытого шаринга.
+// WithMeta uses copy-on-write to avoid hidden map sharing.
 func (e BaseEvent) WithMeta(k, v string) BaseEvent {
 	k = strings.TrimSpace(k)
 	if k == "" {
@@ -108,10 +153,6 @@ func (e BaseEvent) WithMeta(k, v string) BaseEvent {
 
 	if e.Meta == nil {
 		e.Meta = map[string]string{k: v}
-		return e
-	}
-
-	if cur, ok := e.Meta[k]; ok && cur == v {
 		return e
 	}
 
@@ -132,8 +173,8 @@ func (e BaseEvent) WithSchema(ver int32) BaseEvent {
 	return e
 }
 
-// Validate — строгая проверка инвариантов события.
-// Возвращает ErrInvalidEvent (sentinel) с детализацией причины.
+// Validate performs strict event invariant checks.
+// It returns ErrInvalidEvent with a wrapped specific reason.
 func (e BaseEvent) Validate() error {
 	if strings.TrimSpace(e.Name) == "" {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventName)
@@ -142,7 +183,7 @@ func (e BaseEvent) Validate() error {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventProducer)
 	}
 
-	// ✅ At должен быть заполнен и иметь Location == UTC (это и есть "строго UTC")
+	// At must be present and use time.UTC location (strict UTC contract).
 	if e.At.IsZero() || e.At.Location() != time.UTC {
 		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventTime)
 	}
@@ -156,8 +197,39 @@ func (e BaseEvent) Validate() error {
 	return nil
 }
 
+func (e BaseEvent) ValidateWithLimits(limits EventLimits) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	l := limits.normalized()
+	if utf8.RuneCountInString(strings.TrimSpace(e.Name)) > l.MaxNameRunes {
+		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventNameTooLong)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(e.Producer)) > l.MaxProducerRunes {
+		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventProducerTooLong)
+	}
+	if len(e.Meta) > l.MaxMetaEntries {
+		return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventMetaTooMany)
+	}
+
+	for k, v := range e.Meta {
+		if strings.TrimSpace(k) == "" {
+			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventMetaKey)
+		}
+		if utf8.RuneCountInString(k) > l.MaxMetaKeyRunes {
+			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventMetaKeyTooLong)
+		}
+		if utf8.RuneCountInString(v) > l.MaxMetaValueRunes {
+			return fmt.Errorf("%w: %w", ErrInvalidEvent, ErrInvalidEventMetaValueTooLong)
+		}
+	}
+
+	return nil
+}
+
 // Interface implementation
 func (e BaseEvent) EventName() string     { return e.Name }
-func (e BaseEvent) OccurredAt() time.Time { return e.At } // ожидаем UTC
+func (e BaseEvent) OccurredAt() time.Time { return e.At } // UTC by contract
 func (e BaseEvent) EventID() uuid.UUID    { return e.ID }
 func (e BaseEvent) SchemaVer() int32      { return e.SchemaVersion }

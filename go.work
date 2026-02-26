@@ -1,0 +1,13 @@
+go 1.25
+
+toolchain go1.25.7
+
+use (
+	./data
+	./foundation
+	./messaging/kafka/franzgo
+	./messaging/kafka/schemaregistry
+	./runtime
+	./security
+	./transport
+)

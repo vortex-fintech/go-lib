@@ -4,29 +4,32 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
 
-// TLSConfigClient constructs a client-side *tls.Config for mTLS (strict verification).
 func TLSConfigClient(c Config) (*tls.Config, *Reloader, error) {
 	b, err := loadBundle(c)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	if c.ServerName == "" {
+		slog.Warn("mtls: ServerName is empty, hostname verification disabled")
+	}
+
 	state := &atomic.Pointer[bundle]{}
 	state.Store(b)
 
 	tlsConf := &tls.Config{
-		MinVersion: tls.VersionTLS12,
+		MinVersion: tls.VersionTLS13,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			current := state.Load()
 			return &current.cert, nil
 		},
 	}
 
-	// Проверка SAN по имени сервера (SNI)
 	if c.ServerName != "" {
 		tlsConf.ServerName = c.ServerName
 	}
