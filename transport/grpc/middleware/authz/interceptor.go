@@ -50,7 +50,47 @@ type AuthzResult struct {
 	Claims   *libjwt.Claims
 }
 
+var ErrInvalidConfig = errors.New("authz: invalid config")
+
+type ConfigValidationError struct {
+	Field string
+	Err   error
+}
+
+func (e *ConfigValidationError) Error() string {
+	if e == nil {
+		return ErrInvalidConfig.Error()
+	}
+	if e.Err == nil {
+		return ErrInvalidConfig.Error() + ": " + e.Field
+	}
+	return ErrInvalidConfig.Error() + ": " + e.Field + ": " + e.Err.Error()
+}
+
+func (e *ConfigValidationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	if e.Err != nil {
+		return errors.Join(ErrInvalidConfig, e.Err)
+	}
+	return ErrInvalidConfig
+}
+
+func ValidateConfig(cfg Config) error {
+	if cfg.Verifier == nil {
+		return &ConfigValidationError{Field: "Verifier", Err: errors.New("must be set")}
+	}
+	if cfg.Audience == "" {
+		return &ConfigValidationError{Field: "Audience", Err: errors.New("must be set")}
+	}
+	return nil
+}
+
 func Authorize(ctx context.Context, fullMethod string, cfg Config) (*AuthzResult, error) {
+	if err := ValidateConfig(cfg); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 	cfg = normalize(cfg)
 
 	if cfg.SkipAuth != nil && cfg.SkipAuth(fullMethod) {
@@ -115,8 +155,14 @@ func Authorize(ctx context.Context, fullMethod string, cfg Config) (*AuthzResult
 }
 
 func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
-	cfg = normalize(cfg)
+	err := ValidateConfig(cfg)
+	if err == nil {
+		cfg = normalize(cfg)
+	}
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err != nil {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 		result, err := Authorize(ctx, info.FullMethod, cfg)
 		if err != nil {
 			return nil, err
@@ -130,8 +176,14 @@ func UnaryServerInterceptor(cfg Config) grpc.UnaryServerInterceptor {
 }
 
 func StreamServerInterceptor(cfg Config) grpc.StreamServerInterceptor {
-	cfg = normalize(cfg)
+	err := ValidateConfig(cfg)
+	if err == nil {
+		cfg = normalize(cfg)
+	}
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err != nil {
+			return status.Error(codes.Internal, err.Error())
+		}
 		result, err := Authorize(ss.Context(), info.FullMethod, cfg)
 		if err != nil {
 			return err
@@ -198,12 +250,6 @@ func MTLSThumbprintFromPeer(ctx context.Context) string {
 }
 
 func normalize(cfg Config) Config {
-	if cfg.Verifier == nil {
-		panic("authz: Verifier must be set")
-	}
-	if cfg.Audience == "" {
-		panic("authz: Audience must be set")
-	}
 	if cfg.Leeway <= 0 {
 		cfg.Leeway = 45 * time.Second
 	}

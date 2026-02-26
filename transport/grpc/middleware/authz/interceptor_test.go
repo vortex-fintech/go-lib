@@ -27,6 +27,68 @@ func (v *verifierStub) Verify(_ context.Context, _ string) (*libjwt.Claims, erro
 	return v.claims, nil
 }
 
+func TestValidateConfig_Invalid(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateConfig(Config{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected ErrInvalidConfig, got %v", err)
+	}
+
+	var cfgErr *ConfigValidationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("expected ConfigValidationError, got %T", err)
+	}
+	if cfgErr.Field != "Verifier" {
+		t.Fatalf("expected Verifier field, got %s", cfgErr.Field)
+	}
+}
+
+func TestUnaryServerInterceptor_InvalidConfig_ReturnsInternalWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	interceptor := UnaryServerInterceptor(Config{})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("unexpected panic: %v", r)
+		}
+	}()
+
+	_, err := interceptor(context.Background(), struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/svc.Method"}, passHandler)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal, got %v", status.Code(err))
+	}
+}
+
+func TestStreamServerInterceptor_InvalidConfig_ReturnsInternalWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	interceptor := StreamServerInterceptor(Config{})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("unexpected panic: %v", r)
+		}
+	}()
+
+	err := interceptor(struct{}{}, &streamStub{ctx: context.Background()}, &grpc.StreamServerInfo{FullMethod: "/svc.Stream"}, func(srv any, stream grpc.ServerStream) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal, got %v", status.Code(err))
+	}
+}
+
 func TestUnaryServerInterceptor_MissingMetadata(t *testing.T) {
 	t.Parallel()
 
