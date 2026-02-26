@@ -61,6 +61,24 @@ func TestValidateOBO_AudMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateOBO_AudienceRequired(t *testing.T) {
+	t.Parallel()
+
+	claims := &Claims{
+		Subject:  "550e8400-e29b-41d4-a716-446655440000",
+		Audience: []string{"wallet"},
+		Act:      &Actor{Sub: "api-gateway"},
+		Jti:      "jti-123",
+		Iat:      time.Now().Unix(),
+		Exp:      time.Now().Add(time.Hour).Unix(),
+	}
+
+	err := ValidateOBO(time.Now(), claims, OBOValidateOptions{})
+	if err != ErrAudienceRequired {
+		t.Fatalf("expected ErrAudienceRequired, got %v", err)
+	}
+}
+
 func TestValidateOBO_MissingActor(t *testing.T) {
 	t.Parallel()
 
