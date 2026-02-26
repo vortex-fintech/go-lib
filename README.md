@@ -1,139 +1,77 @@
 # go-lib
 
-`go-lib` is a Go workspace with reusable infrastructure libraries for backend services.
+`go-lib` — набор переиспользуемых Go-модулей для backend-сервисов: базовые утилиты, безопасность, транспорт, доступ к данным, runtime-компоненты и Kafka-интеграции.
 
-It is organized as independent modules and used as a shared foundation for transport, security, runtime, data, and Kafka integrations.
+## Workspace overview
 
-## Workspace modules
+Этот репозиторий — Go workspace (`go.work`) из нескольких независимых модулей, которые можно подключать по отдельности:
 
-- `foundation` - shared primitives (errors, logging, validation, text utils, retry, time, domain helpers)
-- `security` - JWT/JWKS verification, mTLS, replay protection, scopes
-- `transport` - gRPC metadata, credentials, dial helpers, middleware chain
-- `data` - Postgres/Redis clients and idempotency store/workflow
-- `runtime` - graceful shutdown manager and metrics handlers
-- `messaging/kafka/franzgo` - Kafka wrapper on franz-go
-- `messaging/kafka/schemaregistry` - Schema Registry and protobuf serde helpers
+- `foundation`
+- `security`
+- `transport`
+- `data`
+- `runtime`
+- `messaging/kafka/franzgo`
+- `messaging/kafka/schemaregistry`
 
-Go workspace configuration is in `go.work`.
+## Quick start
 
-## Requirements
+### Requirements
 
 - Go `1.25`
 - Toolchain `go1.25.7`
-- Docker (for integration and race test runs in container)
 
-## Local development
+### Подключение одного модуля
 
-Download dependencies in all modules:
-
-```bash
-for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
-  (cd "$m" && go mod download)
-done
-```
-
-Build all modules:
+Обычно сервису нужен только один или несколько конкретных модулей, а не весь workspace.
 
 ```bash
-for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
-  (cd "$m" && go build ./...)
-done
+go get github.com/vortex-fintech/go-lib/foundation@latest
 ```
 
-## Tests
+Пример `go.mod`:
 
-Default test sweep:
+```go
+module your/service
 
-```bash
-for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
-  (cd "$m" && go test -count=1 ./...)
-done
+go 1.25
+
+toolchain go1.25.7
+
+require github.com/vortex-fintech/go-lib/foundation vX.Y.Z
 ```
 
-Tagged unit suites:
+### Минимальный пример использования
 
-```bash
-(cd foundation && go test -count=1 -tags unit ./...)
-(cd runtime && go test -count=1 -tags unit ./...)
-(cd data && go test -count=1 -tags "unit testhooks" ./postgres)
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/vortex-fintech/go-lib/foundation/timeutil"
+)
+
+func main() {
+	fmt.Println(timeutil.NowUTC())
+}
 ```
 
-Static checks:
+## Module guide
 
-```bash
-for m in foundation security transport data runtime messaging/kafka/franzgo messaging/kafka/schemaregistry; do
-  (cd "$m" && go vet ./...)
-done
-```
+- [`foundation`](foundation/README.md) — общие примитивы: ошибки, логирование, валидация, retry/time/text/domain-утилиты.
+- [`security`](security/README.md) — JWT/JWKS, mTLS, replay protection и scopes для защиты API.
+- [`transport`](transport/README.md) — инфраструктура gRPC: metadata, credentials, dial helpers, middleware.
+- [`data`](data/README.md) — клиенты Postgres/Redis и механизмы idempotency.
+- [`runtime`](runtime/README.md) — graceful shutdown, health/metrics handlers и runtime-паттерны.
+- [`messaging`](messaging/README.md) — Kafka-интеграции (`franzgo`) и Schema Registry/protobuf serde.
 
-## Integration tests (Docker)
+## Versioning & compatibility
 
-Start test infrastructure:
+- Каждый модуль versioned как отдельный Go module и может релизиться независимо.
+- Внутри одного сервиса рекомендуется фиксировать версии модулей явно в `go.mod`.
+- Для информации по доступным версиям/релизам смотрите теги и GitHub Releases репозитория.
 
-```bash
-docker compose -f data/postgres/docker-compose.test.yml up -d
-docker compose -f data/redis/docker-compose.test.yml up -d
-docker run -d --name redpanda-test -p 9092:9092 -p 9644:9644 \
-  docker.redpanda.com/redpandadata/redpanda:v25.1.5 \
-  redpanda start --overprovisioned --smp 1 --memory 1G --reserve-memory 0M \
-  --node-id 0 --check=false \
-  --kafka-addr PLAINTEXT://0.0.0.0:9092 \
-  --advertise-kafka-addr PLAINTEXT://localhost:9092
-```
+## Development
 
-Run integration suites:
-
-```bash
-(cd data && go test -count=1 -tags integration ./...)
-(cd runtime && go test -count=1 -tags integration ./...)
-(cd messaging/kafka/franzgo && KAFKA_BROKER=localhost:9092 go test -count=1 -tags integration ./...)
-```
-
-Cleanup:
-
-```bash
-docker compose -f data/postgres/docker-compose.test.yml down -v
-docker compose -f data/redis/docker-compose.test.yml down -v
-docker rm -f redpanda-test
-```
-
-## Race tests (Docker)
-
-```bash
-docker run --rm -v "${PWD}:/work" golang:1.25.7 sh -c '
-set -e
-cd /work/foundation && go mod download && go test -race -count=1 ./...
-cd /work/security && go mod download && go test -race -count=1 ./...
-cd /work/transport && go mod download && go test -race -count=1 ./...
-cd /work/data && go mod download && go test -race -count=1 ./...
-cd /work/runtime && go mod download && go test -race -count=1 ./...
-cd /work/messaging/kafka/franzgo && go mod download && go test -race -count=1 ./...
-cd /work/messaging/kafka/schemaregistry && go mod download && go test -race -count=1 ./...
-'
-```
-
-## CI/CD
-
-GitHub Actions workflows are in `.github/workflows`:
-
-- `ci.yml` - formatting check, vet, and module test matrix
-- `integration-race.yml` - integration suites with Docker infra and race tests in Docker
-- `release.yml` - tag-based release workflow (`v*`) with verification and GitHub Release publishing
-
-## Release process
-
-1. Ensure CI is green (including integration and race workflows).
-2. Create and push a semantic tag, for example `v1.4.0`.
-3. GitHub Actions `release.yml` creates a release with autogenerated notes.
-
-## Agent guidance
-
-Global guidance for coding agents is in `AGENTS.md`.
-Module-specific constraints are in:
-
-- `foundation/AGENTS.md`
-- `security/AGENTS.md`
-- `transport/AGENTS.md`
-- `data/AGENTS.md`
-- `runtime/AGENTS.md`
-- `messaging/AGENTS.md`
+Подробные команды для локальной разработки, CI/test orchestration, Docker-интеграций и race-проверок вынесены в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
