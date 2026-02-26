@@ -25,17 +25,25 @@ verifier, _ := jwt.NewJWKSVerifier(jwt.JWKSConfig{
     ExpectedIssuer: "https://sso.internal",
 })
 
-authInterceptor := authz.UnaryServerInterceptor(authz.Config{
-    Verifier:  verifier,
-    Audience:  "wallet",
-    Actor:     "api-gateway",
+cfg := authz.Config{
+    Verifier:   verifier,
+    Audience:   "wallet",
+    Actor:      "api-gateway",
     RequirePoP: true,
-})
+}
+
+if err := authz.ValidateConfig(cfg); err != nil {
+    log.Fatalf("invalid authz config: %v", err)
+}
+
+authInterceptor := authz.UnaryServerInterceptor(cfg)
 
 server := grpc.NewServer(
     grpc.UnaryInterceptor(authInterceptor),
 )
 ```
+
+`UnaryServerInterceptor` и `StreamServerInterceptor` не паникуют при невалидной конфигурации и возвращают `codes.Internal`.
 
 ## Config options
 
