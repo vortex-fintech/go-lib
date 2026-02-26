@@ -17,7 +17,7 @@ Shared Postgres access layer built on `pgx`.
 2. Use `RunnerFromPool()` for non-transactional queries.
 3. Use `WithTx(...)` for atomic write flows.
 4. Use `WithTxRO(...)` for consistent read-only multi-query reads.
-5. Inside tx callback, use `MustRunnerFromContext(txCtx)`.
+5. Inside tx callback, use `MustRunnerFromContext(txCtx)` only in internal layers with strict invariants; on public boundaries, prefer `RunnerFromContextOrError(txCtx)` and return `(value, error)`.
 
 ## Interfaces
 

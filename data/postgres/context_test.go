@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,29 @@ func TestContextWithRunner_NilContext(t *testing.T) {
 	}
 
 	r := MustRunnerFromContext(ctx)
+	if _, ok := r.(contextRunnerStub); !ok {
+		t.Fatalf("expected contextRunnerStub, got %T", r)
+	}
+}
+
+func TestRunnerFromContextOrError_MissingRunner(t *testing.T) {
+	if _, err := RunnerFromContextOrError(nil); !errors.Is(err, ErrRunnerMissingInContext) {
+		t.Fatalf("expected ErrRunnerMissingInContext for nil context, got %v", err)
+	}
+
+	if _, err := RunnerFromContextOrError(context.Background()); !errors.Is(err, ErrRunnerMissingInContext) {
+		t.Fatalf("expected ErrRunnerMissingInContext for empty context, got %v", err)
+	}
+}
+
+func TestRunnerFromContextOrError_UsesStoredRunner(t *testing.T) {
+	want := contextRunnerStub{}
+	ctx := ContextWithRunner(context.Background(), want)
+
+	r, err := RunnerFromContextOrError(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if _, ok := r.(contextRunnerStub); !ok {
 		t.Fatalf("expected contextRunnerStub, got %T", r)
 	}

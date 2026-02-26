@@ -47,14 +47,22 @@ func (c *Client) WithTxRO(ctx context.Context, fn func(ctx context.Context) erro
 // WithTxExplicit is backward-compatible variant with explicit runner callback arg.
 func (c *Client) WithTxExplicit(ctx context.Context, fn func(run Runner) error) error {
 	return c.WithTx(ctx, func(txCtx context.Context) error {
-		return fn(MustRunnerFromContext(txCtx))
+		run, err := RunnerFromContextOrError(txCtx)
+		if err != nil {
+			return err
+		}
+		return fn(run)
 	})
 }
 
 // WithTxROExplicit is backward-compatible read-only explicit-runner variant.
 func (c *Client) WithTxROExplicit(ctx context.Context, fn func(run Runner) error) error {
 	return c.WithTxRO(ctx, func(txCtx context.Context) error {
-		return fn(MustRunnerFromContext(txCtx))
+		run, err := RunnerFromContextOrError(txCtx)
+		if err != nil {
+			return err
+		}
+		return fn(run)
 	})
 }
 
