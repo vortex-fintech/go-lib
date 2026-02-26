@@ -47,6 +47,26 @@ func TestValidateConfig_Invalid(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_InvalidAudienceWhitespace(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateConfig(Config{Verifier: &verifierStub{}, Audience: "   "})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected ErrInvalidConfig, got %v", err)
+	}
+
+	var cfgErr *ConfigValidationError
+	if !errors.As(err, &cfgErr) {
+		t.Fatalf("expected ConfigValidationError, got %T", err)
+	}
+	if cfgErr.Field != "Audience" {
+		t.Fatalf("expected Audience field, got %s", cfgErr.Field)
+	}
+}
+
 func TestUnaryServerInterceptor_InvalidConfig_ReturnsInternalWithoutPanic(t *testing.T) {
 	t.Parallel()
 
