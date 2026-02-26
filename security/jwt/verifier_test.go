@@ -157,6 +157,50 @@ func TestValidateOBO_IATInFuture(t *testing.T) {
 	}
 }
 
+func TestValidateOBO_Leeway_SubSecondExp_NoRounding(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(10, 200_000_000)
+	claims := &Claims{
+		Subject:  "550e8400-e29b-41d4-a716-446655440000",
+		Audience: []string{"wallet"},
+		Act:      &Actor{Sub: "api-gateway"},
+		Jti:      "jti-123",
+		Iat:      now.Add(-time.Minute).Unix(),
+		Exp:      9,
+	}
+
+	err := ValidateOBO(now, claims, OBOValidateOptions{
+		WantAudience: "wallet",
+		Leeway:       1500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("expected token to be valid with sub-second leeway, got %v", err)
+	}
+}
+
+func TestValidateOBO_Leeway_SubSecondIAT_NoRounding(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(10, 900_000_000)
+	claims := &Claims{
+		Subject:  "550e8400-e29b-41d4-a716-446655440000",
+		Audience: []string{"wallet"},
+		Act:      &Actor{Sub: "api-gateway"},
+		Jti:      "jti-123",
+		Iat:      12,
+		Exp:      now.Add(time.Hour).Unix(),
+	}
+
+	err := ValidateOBO(now, claims, OBOValidateOptions{
+		WantAudience: "wallet",
+		Leeway:       1500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("expected iat check to honor sub-second leeway without rounding, got %v", err)
+	}
+}
+
 func TestValidateOBO_TTLTooLong(t *testing.T) {
 	t.Parallel()
 
