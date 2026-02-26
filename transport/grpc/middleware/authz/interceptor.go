@@ -81,7 +81,7 @@ func ValidateConfig(cfg Config) error {
 	if cfg.Verifier == nil {
 		return &ConfigValidationError{Field: "Verifier", Err: errors.New("must be set")}
 	}
-	if cfg.Audience == "" {
+	if strings.TrimSpace(cfg.Audience) == "" {
 		return &ConfigValidationError{Field: "Audience", Err: errors.New("must be set")}
 	}
 	return nil
