@@ -411,6 +411,23 @@ func TestClaims_EffectiveScopes(t *testing.T) {
 	})
 }
 
+func TestDefaultAudienceChecker_NilClaims(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultAudienceChecker(nil, "wallet"); got {
+		t.Fatal("expected false for nil claims")
+	}
+}
+
+func TestDefaultAudienceChecker_MatchingAudience(t *testing.T) {
+	t.Parallel()
+
+	claims := &Claims{Audience: []string{"wallet", "payments"}}
+	if got := DefaultAudienceChecker(claims, "wallet"); !got {
+		t.Fatal("expected true for matching audience")
+	}
+}
+
 func TestJWKSVerifier_RefreshOnUnknownKID(t *testing.T) {
 	t.Parallel()
 

@@ -105,9 +105,14 @@ type Verifier interface {
 }
 
 // AudienceChecker — проверка совпадения aud.
+//
+// Nil-safe contract: если cl == nil, функция обязана вернуть false.
 type AudienceChecker func(cl *Claims, want string) bool
 
 func DefaultAudienceChecker(cl *Claims, want string) bool {
+	if cl == nil {
+		return false
+	}
 	return slices.Contains(cl.Audience, want)
 }
 
