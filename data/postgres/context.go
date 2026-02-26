@@ -1,6 +1,11 @@
 package postgres
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var ErrRunnerMissingInContext = errors.New("postgres: no Runner in context (outside transaction?)")
 
 type ctxKeyRunner struct{}
 
@@ -28,12 +33,20 @@ func RunnerFromContext(ctx context.Context, fallback *Client) Runner {
 
 // MustRunnerFromContext extracts the Runner or panics.
 func MustRunnerFromContext(ctx context.Context) Runner {
+	r, err := RunnerFromContextOrError(ctx)
+	if err != nil {
+		panic(err.Error())
+	}
+	return r
+}
+
+func RunnerFromContextOrError(ctx context.Context) (Runner, error) {
 	if ctx == nil {
-		panic("postgres: no Runner in context (outside transaction?)")
+		return nil, ErrRunnerMissingInContext
 	}
 	r, ok := ctx.Value(ctxKeyRunner{}).(Runner)
 	if !ok {
-		panic("postgres: no Runner in context (outside transaction?)")
+		return nil, ErrRunnerMissingInContext
 	}
-	return r
+	return r, nil
 }
