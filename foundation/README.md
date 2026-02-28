@@ -12,6 +12,7 @@ Shared Go libraries for Vortex fintech services.
 | [errors](./errors) | Transport-agnostic error model (HTTP/gRPC) |
 | [geo](./geo) | Country code normalization (ISO 3166-1 alpha-2) |
 | [hash](./hash) | Deterministic hashing for idempotency keys |
+| [idutil](./idutil) | Type-safe UUID v7 identifiers with generics |
 | [logger](./logger) | Zap-based structured logger with tracing |
 | [logutil](./logutil) | Log-safe output sanitization |
 | [netutil](./netutil) | Timeout sanitization for network clients |
@@ -70,6 +71,7 @@ func main() {
 |---------|---------|
 | [domain](./domain) | Event primitives, EventBuffer |
 | [domainutil](./domainutil) | Revision CAS, UTC time helpers |
+| [idutil](./idutil) | Typed identifiers for domain entities |
 
 ### Data Handling
 

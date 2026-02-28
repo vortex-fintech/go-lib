@@ -78,24 +78,15 @@ func (l EventLimits) normalized() EventLimits {
 // BaseEvent contains common event metadata.
 // It is transport-agnostic and does not contain business payload.
 type BaseEvent struct {
-	// Core
-	Name string
-	At   time.Time
-
-	// Idempotency / tracing.
+	Name          string
+	At            time.Time
 	ID            uuid.UUID
 	TraceID       string
 	CorrelationID string
 	CausationID   uuid.UUID
-
-	// Compatibility.
 	SchemaVersion int32
-
-	// Producer metadata.
-	Producer string
-
-	// Extensible, non-PII metadata.
-	Meta map[string]string
+	Producer      string
+	Meta          map[string]string
 }
 
 var _ Event = BaseEvent{} // compile-time contract
